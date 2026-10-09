@@ -149,7 +149,7 @@ class TestGroupSparsityEffect:
         sparsity_std = float((H_std_norm < thresh).mean())
         sparsity_gs  = float((roll_norm  < thresh).mean())
 
-        # GS should suppress the 6 inactive note groups → more silent cells
+        # GS should suppress the 6 inactive note groups -> more silent cells
         assert sparsity_gs > sparsity_std * 0.8, (
             f"GS sparsity ({sparsity_gs:.3f}) should exceed "
             f"standard ({sparsity_std:.3f}) on a sparse input"

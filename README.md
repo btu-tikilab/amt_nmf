@@ -1,38 +1,38 @@
 # NMF Transcriber V1
 
 Polyphonic piano transcription using Standard Euclidean NMF (Smaragdis & Brown 2003)
-and Group-Sparse β-NMF (O'Hanlon & Plumbley 2014).
+and Group_Sparse β_NMF (O'Hanlon & Plumbley 2014).
 
----
+___
 
 ## Installation
 
 ```bash
 # Clone and install in editable mode
-git clone <repo-url>
-cd nmf-transcriber
-pip install -e ".[dev]"
+git clone <repo_url>
+cd nmf_transcriber
+pip install _e ".[dev]"
 
 # Or with uv
 uv sync
 ```
 
----
+___
 
 ## Quick Start
 
 ```bash
 # 1. Build a dictionary (harmonic — no audio needed)
-python -m nmf_cli build-dict --harmonic --output dict.npy
+python _m nmf_cli build_dict __harmonic __output dict.npy
 
 # 2. Transcribe and compare both methods
-python -m nmf_cli transcribe --input piano.wav --method compare --out-dir outputs/
+python _m nmf_cli transcribe __input piano.wav __method compare __out_dir outputs/
 
 # 3. Run tests
 pytest
 ```
 
----
+___
 
 ## Math Concepts
 
@@ -57,112 +57,112 @@ W ← W ⊙ (VHᵀ)   / (WHHᵀ + ε)
 Both matrices start random and converge to musically meaningful
 templates (W) and activations (H) with no prior musical knowledge.
 
-### Group-Sparse NMF — the ℓ₂,₁ penalty
+### Group_Sparse NMF — the ℓ₂,₁ penalty
 
 ```
-Cost: C_β(S|DX) + λ · Σ_l ‖x[l]‖₂^q        (eq. 11, O'Hanlon 2014)
+Cost: C_β(S\|DX) + λ · Σ_l ‖x[l]‖₂^q        (eq. 11, O'Hanlon 2014)
 ```
 
-- **D** is a *fixed* harmonic dictionary (one group of atoms per note)
-- **X** is the only learned matrix
-- The **group penalty** `λ·Σ‖x[l]‖₂^q` forces all harmonics of one
+_ **D** is a *fixed* harmonic dictionary (one group of atoms per note)
+_ **X** is the only learned matrix
+_ The **group penalty** `λ·Σ‖x[l]‖₂^q` forces all harmonics of one
   note to activate together as a unit
 
 **Update rule (eq. 12) — the only code difference from standard NMF:**
 ```
 X ← X ⊙ numerator / (denominator + λΨ)^φ(β)
-                                  ↑
+                                  up
                            + λΨ  is the ONLY addition
 ```
 
 **Structural gradient Ψ (eq. 13):**
 ```
-Ψ_{k,n} = q · x_{k,n} / ‖x[l]‖₂^(2-q)
+Ψ_{k,n} = q · x_{k,n} / ‖x[l]‖₂^(2_q)
 ```
-- Group active → Ψ small → atom boosted
-- Group inactive → Ψ large → atom suppressed
+_ Group active _> Ψ small _> atom boosted
+_ Group inactive _> Ψ large _> atom suppressed
 
----
+___
 
 ## CLI Usage
 
-### `build-dict`
+### `build_dict`
 
 ```
-python -m nmf_cli build-dict [OPTIONS]
+python _m nmf_cli build_dict [OPTIONS]
 
 Options:
-  --audio-dir  DIR     Folder of isolated single-note WAV/FLAC recordings
-  --harmonic           Build from harmonic physics instead (no audio needed)
-  --output     FILE    Output .npy file path            [default: dict.npy]
-  --pitch-min  INT     Minimum MIDI pitch               [default: 21]
-  --pitch-max  INT     Maximum MIDI pitch               [default: 108]
-  --n-fft      INT     FFT window size                  [default: 2048]
-  --hop-length INT     STFT hop size                    [default: 512]
-  --sr         INT     Target sample rate               [default: 22050]
-  --n-harmonics INT    Harmonics per note (harmonic mode)[default: 6]
+  __audio_dir  DIR     Folder of isolated single_note WAV/FLAC recordings
+  __harmonic           Build from harmonic physics instead (no audio needed)
+  __output     FILE    Output .npy file path            [default: dict.npy]
+  __pitch_min  INT     Minimum MIDI pitch               [default: 21]
+  __pitch_max  INT     Maximum MIDI pitch               [default: 108]
+  __n_fft      INT     FFT window size                  [default: 2048]
+  __hop_length INT     STFT hop size                    [default: 512]
+  __sr         INT     Target sample rate               [default: 22050]
+  __n_harmonics INT    Harmonics per note (harmonic mode)[default: 6]
 ```
 
 **Examples:**
 ```bash
-# Physics-based (fast, no audio required):
-python -m nmf_cli build-dict --harmonic --output dict.npy --pitch-min 48 --pitch-max 84
+# Physics_based (fast, no audio required):
+python _m nmf_cli build_dict __harmonic __output dict.npy __pitch_min 48 __pitch_max 84
 
-# Supervised from MAPS single-note recordings:
-python -m nmf_cli build-dict --audio-dir ./maps_single_notes/ --output dict_maps.npy
+# Supervised from MAPS single_note recordings:
+python _m nmf_cli build_dict __audio_dir ./maps_single_notes/ __output dict_maps.npy
 ```
 
 ### `transcribe`
 
 ```
-python -m nmf_cli transcribe [OPTIONS]
+python _m nmf_cli transcribe [OPTIONS]
 
 Options:
-  --input      FILE    Input audio file (.wav / .flac)         [required]
-  --dict       FILE    Pre-built dictionary .npy file
-  --method     TEXT    standard | group-sparse | compare       [default: compare]
-  --sparsity-weight    Group sparsity λ (group-sparse only)    [default: 0.5]
-  --threshold  FLOAT   Activation threshold for note detection [default: 0.15]
-  --out-dir    DIR     Output directory                        [default: outputs]
-  --K          INT     NMF components (standard unsupervised)  [default: 12]
-  --n-iter     INT     Maximum NMF iterations                  [default: 200]
-  --beta       FLOAT   β-divergence parameter                  [default: 0.5]
-  --verbose            Print iteration-level progress
+  __input      FILE    Input audio file (.wav / .flac)         [required]
+  __dict       FILE    Pre_built dictionary .npy file
+  __method     TEXT    standard \| group_sparse \| compare       [default: compare]
+  __sparsity_weight    Group sparsity λ (group_sparse only)    [default: 0.5]
+  __threshold  FLOAT   Activation threshold for note detection [default: 0.15]
+  __out_dir    DIR     Output directory                        [default: outputs]
+  __K          INT     NMF components (standard unsupervised)  [default: 12]
+  __n_iter     INT     Maximum NMF iterations                  [default: 200]
+  __beta       FLOAT   β_divergence parameter                  [default: 0.5]
+  __verbose            Print iteration_level progress
 ```
 
 **Examples:**
 ```bash
 # Compare both methods side by side:
-python -m nmf_cli transcribe --input recording.wav --method compare
+python _m nmf_cli transcribe __input recording.wav __method compare
 
-# Standard NMF with pre-built dictionary:
-python -m nmf_cli transcribe --input recording.wav --dict dict.npy --method standard
+# Standard NMF with pre_built dictionary:
+python _m nmf_cli transcribe __input recording.wav __dict dict.npy __method standard
 
-# Group-sparse only, custom sparsity:
-python -m nmf_cli transcribe --input recording.wav --method group-sparse --sparsity-weight 0.8
+# Group_sparse only, custom sparsity:
+python _m nmf_cli transcribe __input recording.wav __method group_sparse __sparsity_weight 0.8
 ```
 
----
+___
 
 ## Output Artifacts
 
-After running `transcribe --method compare` you get:
+After running `transcribe __method compare` you get:
 
 ```
 outputs/
 ├── <name>_standard.mid         Playable MIDI — Standard NMF
-├── <name>_group_sparse.mid     Playable MIDI — Group-Sparse NMF
+├── <name>_group_sparse.mid     Playable MIDI — Group_Sparse NMF
 ├── <name>_standard_H.npz       Activation matrix H (K × T)
 ├── <name>_group_sparse_H.npz   Piano roll matrix (n_notes × T)
 └── summary.json                Execution log
 ```
 
-| File | Description |
-|------|-------------|
-| `_standard.mid` | Notes detected by Euclidean NMF, velocity from mean activation |
-| `_group_sparse.mid` | Notes detected by GS-NMF, cleaner/sparser due to group penalty |
-| `_H.npz` | Raw numpy activation arrays for further analysis |
-| `summary.json` | Run config, convergence status, iteration counts, timing, sparsity stats |
+\| File \| Description \|
+\|______\|_____________\|
+\| `_standard.mid` \| Notes detected by Euclidean NMF, velocity from mean activation \|
+\| `_group_sparse.mid` \| Notes detected by GS_NMF, cleaner/sparser due to group penalty \|
+\| `_H.npz` \| Raw numpy activation arrays for further analysis \|
+\| `summary.json` \| Run config, convergence status, iteration counts, timing, sparsity stats \|
 
 ### summary.json structure
 
@@ -197,166 +197,166 @@ outputs/
 }
 ```
 
----
+___
 
 ## Project Structure
 
 ```
-nmf-transcriber/
+nmf_transcriber/
 ├── src/
 │   ├── nmf_core/
 │   │   ├── audio.py           Audio ingestion (librosa STFT)
 │   │   ├── standard_nmf.py    Euclidean NMF solver
 │   │   ├── group_sparse_nmf.py  O'Hanlon & Plumbley (2014) solver
 │   │   ├── dictionary.py      Build / save / load dictionaries
-│   │   ├── midi.py            H matrix → MIDI conversion
+│   │   ├── midi.py            H matrix _> MIDI conversion
 │   │   └── __init__.py
 │   └── nmf_cli/
 │       ├── __main__.py        CLI entry point (typer)
 │       └── __init__.py
 ├── tests/
-│   ├── test_core_nmf.py       NMF math, shapes, non-negativity
+│   ├── test_core_nmf.py       NMF math, shapes, non_negativity
 │   ├── test_group_sparse.py   Group sparsity, Psi, sparsity effect
-│   ├── test_dictionary.py     Serialization round-trip, validation
+│   ├── test_dictionary.py     Serialization round_trip, validation
 │   ├── test_midi.py           MIDI output validity, timing, velocity
-│   └── test_cli_integration.py  End-to-end subprocess tests
+│   └── test_cli_integration.py  End_to_end subprocess tests
 ├── pyproject.toml
 └── README.md
 ```
 
----
+___
 
 ### `evaluate`
 
 ```
-python -m nmf_cli evaluate [OPTIONS]
+python _m nmf_cli evaluate [OPTIONS]
 
 Options:
-  --predicted  FILE    Predicted .mid file from transcribe       [required]
-  --reference  FILE    Ground-truth reference .mid file          [required]
-  --compare-std FILE   Also evaluate a standard .mid side by side
-  --out-json   FILE    Save evaluation scores to JSON
+  __predicted  FILE    Predicted .mid file from transcribe       [required]
+  __reference  FILE    Ground_truth reference .mid file          [required]
+  __compare_std FILE   Also evaluate a standard .mid side by side
+  __out_json   FILE    Save evaluation scores to JSON
 ```
 
 **Examples:**
 ```bash
 # Evaluate one file against ground truth:
-python -m nmf_cli evaluate --predicted out/piano_gs.mid --reference gt.mid
+python _m nmf_cli evaluate __predicted out/piano_gs.mid __reference gt.mid
 
 # Compare both methods against the same reference:
-python -m nmf_cli evaluate \
-    --predicted   out/piano_group_sparse.mid \
-    --compare-std out/piano_standard.mid \
-    --reference   gt.mid --out-json eval.json
+python _m nmf_cli evaluate \
+    __predicted   out/piano_group_sparse.mid \
+    __compare_std out/piano_standard.mid \
+    __reference   gt.mid __out_json eval.json
 ```
 
 **Metrics reported:**
 
-| Metric | Description |
-|--------|-------------|
-| Frame P/R/F | Piano-roll compared frame by frame at 10 ms resolution |
-| Note onset P/R/F | Each detected note matched within ±50 ms onset tolerance |
-| Note+offset P/R/F | Stricter — onset AND offset must both match |
+\| Metric \| Description \|
+\|________\|_____________\|
+\| Frame P/R/F \| Piano_roll compared frame by frame at 10 ms resolution \|
+\| Note onset P/R/F \| Each detected note matched within ±50 ms onset tolerance \|
+\| Note+offset P/R/F \| Stricter — onset AND offset must both match \|
 
 ### `report`
 
 ```
-python -m nmf_cli report [OPTIONS]
+python _m nmf_cli report [OPTIONS]
 
 Options:
-  --std-mid  FILE   Standard NMF .mid from transcribe            [required]
-  --gs-mid   FILE   Group-Sparse NMF .mid from transcribe        [required]
-  --summary  FILE   summary.json from transcribe                 [required]
-  --out      FILE   Output .html file        [default: outputs/report.html]
-  --eval-json FILE  Optional evaluation scores JSON from evaluate
+  __std_mid  FILE   Standard NMF .mid from transcribe            [required]
+  __gs_mid   FILE   Group_Sparse NMF .mid from transcribe        [required]
+  __summary  FILE   summary.json from transcribe                 [required]
+  __out      FILE   Output .html file        [default: outputs/report.html]
+  __eval_json FILE  Optional evaluation scores JSON from evaluate
 ```
 
 **Example:**
 ```bash
-python -m nmf_cli report \
-    --std-mid outputs/piano_standard.mid \
-    --gs-mid  outputs/piano_group_sparse.mid \
-    --summary outputs/summary.json \
-    --out     outputs/report.html
+python _m nmf_cli report \
+    __std_mid outputs/piano_standard.mid \
+    __gs_mid  outputs/piano_group_sparse.mid \
+    __summary outputs/summary.json \
+    __out     outputs/report.html
 ```
 
-Produces a single self-contained HTML file (no internet needed) with
-side-by-side piano rolls, convergence curves, sparsity stats table,
+Produces a single self_contained HTML file (no internet needed) with
+side_by_side piano rolls, convergence curves, sparsity stats table,
 and evaluation scores if provided.
 
 ### `sheet`
 
 ```
-python -m nmf_cli sheet [OPTIONS]
+python _m nmf_cli sheet [OPTIONS]
 
 Options:
-  --input  FILE   Input .mid file                                [required]
-  --out    FILE   Output MusicXML .xml file  [default: outputs/score.xml]
-  --title  TEXT   Score title                [default: NMF Transcription]
-  --pdf           Also attempt PDF via MuseScore (must be on PATH)
+  __input  FILE   Input .mid file                                [required]
+  __out    FILE   Output MusicXML .xml file  [default: outputs/score.xml]
+  __title  TEXT   Score title                [default: NMF Transcription]
+  __pdf           Also attempt PDF via MuseScore (must be on PATH)
 ```
 
 **Example:**
 ```bash
-python -m nmf_cli sheet \
-    --input outputs/piano_group_sparse.mid \
-    --out   outputs/score.xml \
-    --title "My NMF Transcription"
+python _m nmf_cli sheet \
+    __input outputs/piano_group_sparse.mid \
+    __out   outputs/score.xml \
+    __title "My NMF Transcription"
 ```
 
 Opens in MuseScore (free), Sibelius, Finale, or Flat.io.
 
----
+___
 
 ## Complete Workflow
 
 ```bash
 # 1. Build harmonic dictionary
-python -m nmf_cli build-dict --harmonic --output dict.npy
+python _m nmf_cli build_dict __harmonic __output dict.npy
 
 # 2. Transcribe both methods
-python -m nmf_cli transcribe \
-    --input piano.wav --method compare \
-    --out-dir outputs/
+python _m nmf_cli transcribe \
+    __input piano.wav __method compare \
+    __out_dir outputs/
 
 # 3. Evaluate against ground truth (if available)
-python -m nmf_cli evaluate \
-    --predicted   outputs/piano_group_sparse.mid \
-    --compare-std outputs/piano_standard.mid \
-    --reference   ground_truth.mid \
-    --out-json    outputs/eval.json
+python _m nmf_cli evaluate \
+    __predicted   outputs/piano_group_sparse.mid \
+    __compare_std outputs/piano_standard.mid \
+    __reference   ground_truth.mid \
+    __out_json    outputs/eval.json
 
 # 4. Generate HTML comparison report
-python -m nmf_cli report \
-    --std-mid outputs/piano_standard.mid \
-    --gs-mid  outputs/piano_group_sparse.mid \
-    --summary outputs/summary.json \
-    --eval-json outputs/eval.json \
-    --out     outputs/report.html
+python _m nmf_cli report \
+    __std_mid outputs/piano_standard.mid \
+    __gs_mid  outputs/piano_group_sparse.mid \
+    __summary outputs/summary.json \
+    __eval_json outputs/eval.json \
+    __out     outputs/report.html
 
 # 5. Export sheet music
-python -m nmf_cli sheet \
-    --input outputs/piano_group_sparse.mid \
-    --out   outputs/score.xml
+python _m nmf_cli sheet \
+    __input outputs/piano_group_sparse.mid \
+    __out   outputs/score.xml
 ```
 
----
+___
 
 ## Output Artifacts (complete list)
 
 ```
 outputs/
 ├── <name>_standard.mid         Standard NMF — playable MIDI
-├── <name>_group_sparse.mid     Group-Sparse NMF — playable MIDI
+├── <name>_group_sparse.mid     Group_Sparse NMF — playable MIDI
 ├── <name>_standard_H.npz       Activation matrix H (K × T)
 ├── <name>_group_sparse_H.npz   Piano roll matrix (n_notes × T)
 ├── summary.json                Run config, convergence, sparsity stats
 ├── eval.json                   Evaluation scores (P/R/F, frame + note)
-├── report.html                 Self-contained comparison report
+├── report.html                 Self_contained comparison report
 └── score.xml                   MusicXML sheet music
 ```
 
----
+___
 
 ## Troubleshooting
 
@@ -365,7 +365,7 @@ outputs/
 ERROR: Dimension mismatch: spectrogram V has 1025 frequency bins
        but dictionary W has 512 rows.
 ```
-**Fix:** Rebuild the dictionary with the same `--n-fft` you use for transcription.
+**Fix:** Rebuild the dictionary with the same `__n_fft` you use for transcription.
 Both default to 2048, so this only happens if you manually changed one.
 
 ### Missing dictionary sidecar
@@ -373,21 +373,21 @@ Both default to 2048, so this only happens if you manually changed one.
 ERROR: Dictionary metadata sidecar missing: dict.json
 ```
 **Fix:** The `.json` file must exist alongside the `.npy`. Rebuild the dictionary
-— both files are created together by `build-dict`.
+— both files are created together by `build_dict`.
 
 ### No notes in MIDI output
-If the `.mid` file is empty, lower the `--threshold`:
+If the `.mid` file is empty, lower the `__threshold`:
 ```bash
-python -m nmf_cli transcribe --input audio.wav --threshold 0.05
+python _m nmf_cli transcribe __input audio.wav __threshold 0.05
 ```
 
 ### pretty_midi / librosa not found
 ```bash
-pip install -e ".[dev]"
+pip install _e ".[dev]"
 # or
 uv sync
 ```
 
 ### Slow transcription on long files
-Group-sparse NMF on a 5-minute file can take 2–5 minutes.
-Use `--method standard` for faster results, or trim the audio to a short clip.
+Group_sparse NMF on a 5_minute file can take 2–5 minutes.
+Use `__method standard` for faster results, or trim the audio to a short clip.

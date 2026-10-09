@@ -1,13 +1,13 @@
 """
 src/nmf_core/midi.py
 ─────────────────────────────────────────────────────────────────
-Post-processing: convert activation matrix H → playable MIDI file.
+Post-processing: convert activation matrix H -> playable MIDI file.
 
 Pipeline
 ────────
-H (K × T)  →  threshold  →  detect note-on/off events
-             →  frame_to_time  →  pretty_midi.Note objects
-             →  .mid file
+H (K × T)  ->  threshold  ->  detect note-on/off events
+             ->  frame_to_time  ->  pretty_midi.Note objects
+             ->  .mid file
 
 Threshold strategy
 ──────────────────
@@ -108,7 +108,7 @@ def activations_to_midi(
     pm.write(str(out_path))
 
     n_notes = len(piano.notes)
-    print(f"  MIDI saved → {out_path}  ({n_notes} notes)")
+    print(f"  MIDI saved -> {out_path}  ({n_notes} notes)")
     return pm
 
 
@@ -161,7 +161,7 @@ def save_activations_npz(
             [json.dumps(p) for p in pitch_map], dtype=object
         ),
     )
-    print(f"  Activations saved → {out_path}")
+    print(f"  Activations saved -> {out_path}")
 
 
 def build_summary(

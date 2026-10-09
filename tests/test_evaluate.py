@@ -46,7 +46,7 @@ def perfect_ref(tmp_path) -> Path:
 
 @pytest.fixture
 def perfect_pred(tmp_path, perfect_ref) -> Path:
-    """Predicted identical to reference → scores should be ~1.0."""
+    """Predicted identical to reference -> scores should be ~1.0."""
     return _make_midi(tmp_path / "pred_perfect.mid", [
         (60, 0.0, 1.0),
         (64, 1.0, 2.0),

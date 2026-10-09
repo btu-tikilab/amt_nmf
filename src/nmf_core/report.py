@@ -32,7 +32,7 @@ import pretty_midi
 
 def _midi_to_roll(midi_path: str | Path,
                   fs: float = 50.0) -> np.ndarray:
-    """Load MIDI → (88, T) piano roll (pitches 21-108)."""
+    """Load MIDI -> (88, T) piano roll (pitches 21-108)."""
     pm   = pretty_midi.PrettyMIDI(str(midi_path))
     roll = pm.get_piano_roll(fs=fs)        # (128, T)
     return roll[21:109, :]                  # crop to 88 piano keys
@@ -382,7 +382,7 @@ def generate_report(
             "Audio input":     summary.get("audio_input", ""),
             "Threshold":       summary.get("threshold", ""),
             "Sparsity weight": summary.get("sparsity_weight", ""),
-            "β (beta)":        gs_res.get("beta", ""),
+            "beta (beta)":        gs_res.get("beta", ""),
             "λ (lambda)":      gs_res.get("lam", ""),
         }.items()
     )
@@ -400,5 +400,5 @@ def generate_report(
     )
 
     out_path.write_text(html, encoding="utf-8")
-    print(f"  Report saved → {out_path}")
+    print(f"  Report saved -> {out_path}")
     return out_path

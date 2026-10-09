@@ -80,7 +80,7 @@ def midi_to_musicxml(
     # Write MusicXML
     score.write("musicxml", fp=str(out_path))
 
-    print(f"  MusicXML saved → {out_path}")
+    print(f"  MusicXML saved -> {out_path}")
     return out_path
 
 
@@ -90,7 +90,7 @@ def midi_to_pdf(
     title:     str = "NMF Transcription",
 ) -> Path:
     """
-    Convert MIDI → MusicXML → PDF (requires MuseScore installed).
+    Convert MIDI -> MusicXML -> PDF (requires MuseScore installed).
 
     MuseScore must be on the system PATH for PDF rendering.
     Falls back to MusicXML if MuseScore is not found.
@@ -108,7 +108,7 @@ def midi_to_pdf(
                 capture_output=True, timeout=60,
             )
             if result.returncode == 0 and Path(out_path).exists():
-                print(f"  PDF saved → {out_path}")
+                print(f"  PDF saved -> {out_path}")
                 return Path(out_path)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue

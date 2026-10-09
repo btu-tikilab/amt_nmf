@@ -7,8 +7,8 @@ V  ≈  W  @  H
 (F×T)  (F×K)  (K×T)
 
 Update rules (Lee & Seung 2001, Euclidean variant):
-    H  ←  H  ⊙  (WᵀV)       /  (WᵀWH + ε)
-    W  ←  W  ⊙  (VHᵀ)       /  (WHHᵀ + ε)
+    H  <-  H  ⊙  (WᵀV)       /  (WᵀWH + ε)
+    W  <-  W  ⊙  (VHᵀ)       /  (WHHᵀ + ε)
 
 No UI code lives here — pure numpy.
 """
@@ -147,7 +147,7 @@ def run_nmf(
                 if rel < tol:
                     converged = True
                     if verbose:
-                        print(f"  ✓ Converged at iter {i}")
+                        print(f"  ok Converged at iter {i}")
                     break
 
     elapsed   = time.perf_counter() - t0

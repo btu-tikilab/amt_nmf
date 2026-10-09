@@ -1,11 +1,11 @@
 """
 src/nmf_core/group_sparse_nmf.py
 ─────────────────────────────────────────────────────────────────
-Group-Sparse β-NMF — O'Hanlon & Plumbley (2014).
+Group-Sparse beta-NMF — O'Hanlon & Plumbley (2014).
 
-Cost:  C_β(S|DX) + λ · Σ_l ‖x[l]‖_2^q        (eq. 11)
+Cost:  C_beta(S|DX) + λ · Σ_l ‖x[l]‖_2^q        (eq. 11)
 Update (eq. 12):
-    X ← X ⊙ ([Dᵀ(S⊙(DX)^[β-2])] / ([Dᵀ(DX)^[β-1]] + λΨ))^φ(β)
+    X <- X ⊙ ([Dᵀ(S⊙(DX)^[beta-2])] / ([Dᵀ(DX)^[beta-1]] + λΨ))^φ(beta)
 
 Structural gradient (eq. 13):
     Ψ_{k,n} = q · x_{k,n} / ‖x[l]‖_2^(2-q)
@@ -24,7 +24,7 @@ import numpy as np
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def phi(beta: float) -> float:
-    """Step-size exponent φ(β) guaranteeing cost descent."""
+    """Step-size exponent φ(beta) guaranteeing cost descent."""
     if beta < 1:
         return 1.0 / (2.0 - beta)
     if beta > 2:
@@ -45,8 +45,8 @@ def compute_psi(
     """
     Structural gradient Ψ — links each atom to its whole group.
 
-    Groups whose norm is large  → Ψ small  → atom boosted
-    Groups whose norm is small  → Ψ large  → atom suppressed
+    Groups whose norm is large  -> Ψ small  -> atom boosted
+    Groups whose norm is small  -> Ψ large  -> atom suppressed
     """
     Psi = np.zeros_like(X)
     exp = 2.0 - q
@@ -63,7 +63,7 @@ def beta_divergence(
     beta: float,
     eps: float = 1e-10,
 ) -> float:
-    """β-divergence C_β(S|Z). β=2 → Euclidean."""
+    """beta-divergence C_beta(S|Z). beta=2 -> Euclidean."""
     Z = np.maximum(Z, eps)
     if abs(beta - 1.0) < 1e-8:
         Sc = np.maximum(S, eps)
@@ -98,7 +98,7 @@ class GroupSparseResult:
     X_snapshots:  dict = field(default_factory=dict)
 
     def piano_roll(self) -> np.ndarray:
-        """Sum atoms within each group → (n_notes, T)."""
+        """Sum atoms within each group -> (n_notes, T)."""
         return np.stack(
             [self.X[idx, :].sum(axis=0) for idx in self.groups], axis=0
         )
@@ -133,11 +133,11 @@ def group_sparse_nmd(
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> GroupSparseResult:
     """
-    Group-Sparse β-NMD (O'Hanlon & Plumbley 2014).
+    Group-Sparse beta-NMD (O'Hanlon & Plumbley 2014).
 
     D is FIXED. Only X (activations) is learned.
 
-    Phase 1: n_init_unpenalised standard β-NMF updates (warm start)
+    Phase 1: n_init_unpenalised standard beta-NMF updates (warm start)
     Phase 2: group-sparse update (eq. 12) until convergence
 
     Parameters
@@ -145,7 +145,7 @@ def group_sparse_nmd(
     S       : (F, T) normalised magnitude spectrogram
     D       : (F, K) fixed harmonic dictionary
     groups  : column-index lists, one per note
-    beta    : β-divergence parameter (paper uses 0.5)
+    beta    : beta-divergence parameter (paper uses 0.5)
     lam     : group sparsity weight λ (paper uses 0.5)
     q       : group norm exponent (paper uses 0.5)
     """
@@ -213,7 +213,7 @@ def group_sparse_nmd(
                 if chg < tol_pct:
                     converged = True
                     if verbose:
-                        print(f"  ✓ Converged at iter {i}")
+                        print(f"  ok Converged at iter {i}")
                     break
 
     elapsed           = time.perf_counter() - t0

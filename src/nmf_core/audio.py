@@ -52,7 +52,7 @@ def load_spectrogram(
     sr         : target sample rate (None = keep original)
     n_fft      : FFT window size
     hop_length : STFT hop in samples
-    normalize  : if True, divide V by its max (required for β<1 divergence)
+    normalize  : if True, divide V by its max (required for beta<1 divergence)
 
     Returns
     -------
