@@ -76,7 +76,14 @@ def run_nmf(
         snapshot_iters = [1, 5, 10, 25, 50, 100, 200, n_iter]
 
     V = np.asarray(V, dtype=np.float64)
-    if V.ndim != 2 or np.any(V < 0):
+
+    if V.ndim != 2:
+        raise ValueError("V must be a 2-D non-negative matrix.")
+
+    if not np.all(np.isfinite(V)):
+        raise ValueError("V must contain only finite values (no NaN or infinity).")
+
+    if np.any(V < 0):
         raise ValueError("V must be a 2-D non-negative matrix.")
 
     F, T = V.shape

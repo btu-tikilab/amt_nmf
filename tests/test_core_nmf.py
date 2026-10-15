@@ -96,4 +96,25 @@ class TestNMFValidation:
         V   = w @ h
         r   = run_nmf(V, K=1, n_iter=1000, tol=1e-10)
         rel = np.linalg.norm(V - r.V_approx, "fro") / np.linalg.norm(V, "fro")
+
         assert rel < 0.01
+
+    def test_standard_nmf_rejects_nan(self):
+        import numpy as np
+        import pytest
+        from nmf_core.standard_nmf import run_nmf
+
+        V = np.array([[np.nan, 1.0], [1.0, 2.0]])
+
+        with pytest.raises(ValueError, match="finite"):
+            run_nmf(V, K=2, n_iter=2)
+
+    def test_standard_nmf_rejects_infinity(self):
+        import numpy as np
+        import pytest
+        from nmf_core.standard_nmf import run_nmf
+
+        V = np.array([[np.inf, 1.0], [1.0, 2.0]])
+
+        with pytest.raises(ValueError, match="finite"):
+            run_nmf(V, K=2, n_iter=2)

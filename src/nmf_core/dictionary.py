@@ -6,7 +6,7 @@ Dictionary Management Subsystem.
 Two ways to build a dictionary W:
 
 A) Supervised (preferred) — extract from isolated single-note recordings.
-   Each note clip 
+   Each note clip
    NMF with K=1 -> the one W column is that note's
    spectral fingerprint.  Much cleaner than unsupervised because the
    algorithm has exactly one note to represent.
@@ -237,6 +237,7 @@ def build_from_audio_dir(
 # ── harmonic dictionary builder ───────────────────────────────────────────────
 
 
+
 def build_harmonic_dictionary(
     freqs: np.ndarray,
     midi_low: int = 21,
@@ -245,45 +246,72 @@ def build_harmonic_dictionary(
     sigma_hz: float = 8.0,
 ) -> tuple[np.ndarray, List[List[int]], List[Dict]]:
     """
-    Build a fixed harmonic dictionary from musical physics.
+    Build one combined harmonic template per MIDI note.
 
-    Returns (D, groups, pitch_map) where:
-      D      : (F, K)
-      groups : column-index lists, one per note
-      pitch_map : list of {"component":k, "midi_note":m, "note_name":n}
+    Returns:
+      D:         (F, K) dictionary, one column per note
+      groups:    singleton column-index lists, one per note
+      pitch_map: one metadata entry per note
     """
-    atoms: List[np.ndarray] = []
+    templates: List[np.ndarray] = []
     groups: List[List[int]] = []
     pitch_map: List[Dict] = []
-    col = 0
+
+    freqs = np.asarray(freqs, dtype=np.float64)
+
+    if freqs.ndim != 1 or freqs.size == 0:
+        raise ValueError("freqs must be a non-empty 1-D array.")
+
+    if not np.all(np.isfinite(freqs)):
+        raise ValueError("freqs must contain only finite values.")
+
+    if np.any(freqs < 0) or np.any(np.diff(freqs) < 0):
+        raise ValueError("freqs must be nonnegative and sorted in ascending order.")
+
+    if not 0 <= midi_low <= midi_high <= 127:
+        raise ValueError("MIDI range must satisfy 0 <= midi_low <= midi_high <= 127.")
+
+    if n_harmonics < 1:
+        raise ValueError("n_harmonics must be at least 1.")
+
+    if not np.isfinite(sigma_hz) or sigma_hz <= 0:
+        raise ValueError("sigma_hz must be a positive finite number.")
 
     for m in range(midi_low, midi_high + 1):
         f0 = float(librosa.midi_to_hz(m))
-        gcols: List[int] = []
+        template = np.zeros_like(freqs, dtype=np.float64)
 
         for h in range(1, n_harmonics + 1):
             f_h = h * f0
             if f_h > freqs[-1]:
                 break
-            atom = (1.0 / h) * np.exp(-0.5 * ((freqs - f_h) / sigma_hz) ** 2)
-            atoms.append(atom)
-            gcols.append(col)
-            col += 1
 
-        if gcols:
-            g_max = max(atoms[c].max() for c in gcols) + 1e-12
-            for c in gcols:
-                atoms[c] /= g_max
-            groups.append(gcols)
-            pitch_map.append(
-                {
-                    "component": len(groups) - 1,
-                    "midi_note": int(m),
-                    "note_name": librosa.midi_to_note(m),
-                }
+            harmonic = (1.0 / h) * np.exp(
+                -0.5 * ((freqs - f_h) / sigma_hz) ** 2
             )
+            template += harmonic
 
-    D = np.stack(atoms, axis=1).astype(np.float64)
+        norm = np.linalg.norm(template)
+        if norm <= 1e-12:
+            continue
+
+        template /= norm
+        component = len(templates)
+        templates.append(template)
+        groups.append([component])
+
+        pitch_map.append(
+            {
+                "component": component,
+                "midi_note": int(m),
+                "note_name": librosa.midi_to_note(m),
+            }
+        )
+
+    if not templates:
+        raise ValueError("No harmonic templates could be generated.")
+
+    D = np.stack(templates, axis=1).astype(np.float64)
     return D, groups, pitch_map
 
 
