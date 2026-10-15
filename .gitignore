@@ -1,34 +1,12 @@
-﻿.venv/
-venv/
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.coverage
-htmlcov/
-dist/
-build/
 *.egg-info/
-.env
-# Generated transcription outputs
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
 outputs/
-outputs_*/
-
-# Temporary debugging and diagnostic scripts
-check_*.py
-debug_*.py
-diagnose_*.py
-inspect_*.py
-compare_*.py
-decode_*.py
-test_beta_synthetic.py
-test_combined_dictionary.py
-test_filter_settings.py
-
-# Local generated dictionary artifacts
-dict.npy
-dict.json
-
-# Backup files
-*.bak
-*.backup
-*.review-backup
+*.npy
+!tests/**/*.npy

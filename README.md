@@ -1,393 +1,226 @@
-# NMF Transcriber V1
+# NMF Transcriber
 
-Polyphonic piano transcription using Standard Euclidean NMF (Smaragdis & Brown 2003)
-and Group_Sparse β_NMF (O'Hanlon & Plumbley 2014).
+Polyphonic piano transcription with non-negative matrix factorisation (NMF).
+It turns a `.wav`/`.flac` recording into MIDI using a pitch dictionary learned
+from single-note recordings, and compares two solvers:
 
-___
+* **Standard NMF**: Euclidean multiplicative updates (Lee & Seung).
+* **Group-sparse NMF**: the l1,2 group penalty of O'Hanlon & Plumbley (2014),
+  which keeps the number of active pitches per frame small and suppresses
+  overtone "ghost" notes.
 
-## Installation
+```
+src/
+  nmf_core/             algorithm package, no printing or UI code
+    audio.py            librosa loading + constant-Q spectrogram V
+    nmf.py              standard_nmf, group_sparse_nmf
+    dictionary.py       build / save / load the dictionary W (+ JSON sidecar)
+    midi.py             activations H -> note events -> .mid, .npz dumps
+    pipeline.py         transcribe(): validation, both solvers, summary.json
+    errors.py           user-facing exception types
+  nmf_cli/              argparse command line (python -m nmf_cli)
+tests/                  pytest suite (synthetic audio, no dataset needed)
+```
+
+## 1. Setup
+
+Python 3.10 or newer.
 
 ```bash
-# Clone and install in editable mode
-git clone <repo_url>
-cd nmf_transcriber
-pip install _e ".[dev]"
-
-# Or with uv
-uv sync
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"            # package + pytest + ruff
+# runtime only, without the test tools:  pip install -e .
 ```
 
-___
-
-## Quick Start
+Check the install:
 
 ```bash
-# 1. Build a dictionary (harmonic — no audio needed)
-python _m nmf_cli build_dict __harmonic __output dict.npy
-
-# 2. Transcribe and compare both methods
-python _m nmf_cli transcribe __input piano.wav __method compare __out_dir outputs/
-
-# 3. Run tests
-pytest
+pytest                             # all unit and integration tests
+ruff check . && ruff format --check .
 ```
 
-___
+## 2. The maths
 
-## Math Concepts
+### Spectrogram V
+Audio is resampled to 22 050 Hz and converted to a magnitude constant-Q
+transform: 288 bins from A0 (27.5 Hz), 36 bins per octave (one bin = 1/3
+semitone), hop 512 samples (23.2 ms). On a log-frequency axis every note's
+harmonics have the same spacing, so a pitch looks like a shifted copy of its
+neighbours. V has shape F x T (bins x frames) and is scaled to max 1.
 
-### Standard NMF — V ≈ W × H
+### Factorisation V ≈ W H
+* **W** (F x K) is the dictionary: each column is a spectral template
+  (an *atom*). Every pitch owns `atoms_per_pitch` atoms (default 2, e.g. a
+  bright attack spectrum and a duller decay spectrum).
+* **H** (K x T) holds the activations: how strongly each atom sounds in each
+  frame. Summing a pitch's atom rows gives its piano-roll row.
 
-```
-V   ≈   W   ×   H
-(F×T)  (F×K)  (K×T)
+W is fixed during transcription; only H is estimated, so H >= 0 is the
+transcription.
 
-V = magnitude spectrogram  (input)
-W = spectral basis templates  (what each note looks like in frequency)
-H = temporal activation matrix  (when each note plays — the piano roll)
-K = number of components
-```
-
-**Update rules (Euclidean / Frobenius cost):**
-```
-H ← H ⊙ (WᵀV)   / (WᵀWH + ε)
-W ← W ⊙ (VHᵀ)   / (WHHᵀ + ε)
-```
-
-Both matrices start random and converge to musically meaningful
-templates (W) and activations (H) with no prior musical knowledge.
-
-### Group_Sparse NMF — the ℓ₂,₁ penalty
+### Standard (Euclidean) NMF
+Minimises ½‖V − WH‖²_F with the multiplicative update
 
 ```
-Cost: C_β(S\|DX) + λ · Σ_l ‖x[l]‖₂^q        (eq. 11, O'Hanlon 2014)
+H ← H ⊙ (WᵀV) / (WᵀW H)
 ```
 
-_ **D** is a *fixed* harmonic dictionary (one group of atoms per note)
-_ **X** is the only learned matrix
-_ The **group penalty** `λ·Σ‖x[l]‖₂^q` forces all harmonics of one
-  note to activate together as a unit
+which keeps H non-negative and never increases the cost.
 
-**Update rule (eq. 12) — the only code difference from standard NMF:**
-```
-X ← X ⊙ numerator / (denominator + λΨ)^φ(β)
-                                  up
-                           + λΨ  is the ONLY addition
-```
-
-**Structural gradient Ψ (eq. 13):**
-```
-Ψ_{k,n} = q · x_{k,n} / ‖x[l]‖₂^(2_q)
-```
-_ Group active _> Ψ small _> atom boosted
-_ Group inactive _> Ψ large _> atom suppressed
-
-___
-
-## CLI Usage
-
-### `build_dict`
+### Group-sparse NMF and the l1,2 penalty
+The atoms are split into groups G_p, one per pitch. The cost becomes
 
 ```
-python _m nmf_cli build_dict [OPTIONS]
-
-Options:
-  __audio_dir  DIR     Folder of isolated single_note WAV/FLAC recordings
-  __harmonic           Build from harmonic physics instead (no audio needed)
-  __output     FILE    Output .npy file path            [default: dict.npy]
-  __pitch_min  INT     Minimum MIDI pitch               [default: 21]
-  __pitch_max  INT     Maximum MIDI pitch               [default: 108]
-  __n_fft      INT     FFT window size                  [default: 2048]
-  __hop_length INT     STFT hop size                    [default: 512]
-  __sr         INT     Target sample rate               [default: 22050]
-  __n_harmonics INT    Harmonics per note (harmonic mode)[default: 6]
+D_β(V | WH) + λ Σ_t Σ_p ‖H[G_p, t]‖₂
 ```
 
-**Examples:**
-```bash
-# Physics_based (fast, no audio required):
-python _m nmf_cli build_dict __harmonic __output dict.npy __pitch_min 48 __pitch_max 84
-
-# Supervised from MAPS single_note recordings:
-python _m nmf_cli build_dict __audio_dir ./maps_single_notes/ __output dict_maps.npy
-```
-
-### `transcribe`
+The inner l2 norm couples the atoms of one pitch (they switch on and off
+together); the outer sum is an l1 norm over pitches, which drives whole
+pitches to exactly zero, so each frame is explained by few notes. This removes
+the typical NMF error of explaining a note's overtones with the notes an
+octave or a fifth above. The multiplicative update is
 
 ```
-python _m nmf_cli transcribe [OPTIONS]
-
-Options:
-  __input      FILE    Input audio file (.wav / .flac)         [required]
-  __dict       FILE    Pre_built dictionary .npy file
-  __method     TEXT    standard \| group_sparse \| compare       [default: compare]
-  __sparsity_weight    Group sparsity λ (group_sparse only)    [default: 0.5]
-  __threshold  FLOAT   Activation threshold for note detection [default: 0.15]
-  __out_dir    DIR     Output directory                        [default: outputs]
-  __K          INT     NMF components (standard unsupervised)  [default: 12]
-  __n_iter     INT     Maximum NMF iterations                  [default: 200]
-  __beta       FLOAT   β_divergence parameter                  [default: 0.5]
-  __verbose            Print iteration_level progress
+H ← H ⊙ [ Wᵀ(V ⊙ Λ^(β−2)) / (Wᵀ Λ^(β−1) + λ H / ‖H[G(k), t]‖₂) ]^φ(β),   Λ = WH
 ```
 
-**Examples:**
-```bash
-# Compare both methods side by side:
-python _m nmf_cli transcribe __input recording.wav __method compare
+with φ(β) = 1/(2−β) for β < 1, 1 for 1 ≤ β ≤ 2. As in the paper, the first
+10 iterations run without the penalty (warm start). `--beta 2` (default) uses
+the same Euclidean cost as the standard solver, so `--method compare` isolates
+the effect of the penalty; `--beta 1` (KL) and `--beta 0` (Itakura-Saito)
+are also available. `λ` is `--sparsity-weight`; λ = 0 gives back standard NMF.
 
-# Standard NMF with pre_built dictionary:
-python _m nmf_cli transcribe __input recording.wav __dict dict.npy __method standard
+### From H to MIDI
+1. Sum each pitch's atom rows of H and divide by the global maximum.
+2. Every peak at least `--threshold` high, and at least `--threshold` above the
+   surrounding valleys, is a **Note-On**. Its time is the half-rise point of
+   the peak, so repeated notes of the same pitch re-attack.
+3. **Note-Off** when the activation falls below `threshold / 2` (hysteresis)
+   or at the next Note-On of that pitch. Notes shorter than `--min-duration`
+   (50 ms) are dropped.
+4. Frame f becomes time `f × hop_length / sample_rate` seconds; velocity
+   follows the peak height.
 
-# Group_sparse only, custom sparsity:
-python _m nmf_cli transcribe __input recording.wav __method group_sparse __sparsity_weight 0.8
-```
+## 3. Usage
 
-___
+### Build a dictionary
 
-## Output Artifacts
-
-After running `transcribe __method compare` you get:
-
-```
-outputs/
-├── <name>_standard.mid         Playable MIDI — Standard NMF
-├── <name>_group_sparse.mid     Playable MIDI — Group_Sparse NMF
-├── <name>_standard_H.npz       Activation matrix H (K × T)
-├── <name>_group_sparse_H.npz   Piano roll matrix (n_notes × T)
-└── summary.json                Execution log
-```
-
-\| File \| Description \|
-\|______\|_____________\|
-\| `_standard.mid` \| Notes detected by Euclidean NMF, velocity from mean activation \|
-\| `_group_sparse.mid` \| Notes detected by GS_NMF, cleaner/sparser due to group penalty \|
-\| `_H.npz` \| Raw numpy activation arrays for further analysis \|
-\| `summary.json` \| Run config, convergence status, iteration counts, timing, sparsity stats \|
-
-### summary.json structure
-
-```json
-{
-  "method": "compare",
-  "audio_input": "piano.wav",
-  "output_dir": "outputs",
-  "threshold": 0.15,
-  "sparsity_weight": 0.5,
-  "results": {
-    "standard": {
-      "converged": true,
-      "n_iter": 143,
-      "final_error": 12.3456,
-      "error_reduction_pct": 94.2,
-      "elapsed_s": 3.14,
-      "K": 37
-    },
-    "group_sparse": {
-      "converged": true,
-      "n_iter": 67,
-      "final_cost": 8.7654,
-      "elapsed_s": 5.21,
-      "beta": 0.5,
-      "lam": 0.5,
-      "q": 0.5,
-      "mean_active_per_frame": 0.82,
-      "sparsity_pct": 97.8
-    }
-  }
-}
-```
-
-___
-
-## Project Structure
-
-```
-nmf_transcriber/
-├── src/
-│   ├── nmf_core/
-│   │   ├── audio.py           Audio ingestion (librosa STFT)
-│   │   ├── standard_nmf.py    Euclidean NMF solver
-│   │   ├── group_sparse_nmf.py  O'Hanlon & Plumbley (2014) solver
-│   │   ├── dictionary.py      Build / save / load dictionaries
-│   │   ├── midi.py            H matrix _> MIDI conversion
-│   │   └── __init__.py
-│   └── nmf_cli/
-│       ├── __main__.py        CLI entry point (typer)
-│       └── __init__.py
-├── tests/
-│   ├── test_core_nmf.py       NMF math, shapes, non_negativity
-│   ├── test_group_sparse.py   Group sparsity, Psi, sparsity effect
-│   ├── test_dictionary.py     Serialization round_trip, validation
-│   ├── test_midi.py           MIDI output validity, timing, velocity
-│   └── test_cli_integration.py  End_to_end subprocess tests
-├── pyproject.toml
-└── README.md
-```
-
-___
-
-### `evaluate`
-
-```
-python _m nmf_cli evaluate [OPTIONS]
-
-Options:
-  __predicted  FILE    Predicted .mid file from transcribe       [required]
-  __reference  FILE    Ground_truth reference .mid file          [required]
-  __compare_std FILE   Also evaluate a standard .mid side by side
-  __out_json   FILE    Save evaluation scores to JSON
-```
-
-**Examples:**
-```bash
-# Evaluate one file against ground truth:
-python _m nmf_cli evaluate __predicted out/piano_gs.mid __reference gt.mid
-
-# Compare both methods against the same reference:
-python _m nmf_cli evaluate \
-    __predicted   out/piano_group_sparse.mid \
-    __compare_std out/piano_standard.mid \
-    __reference   gt.mid __out_json eval.json
-```
-
-**Metrics reported:**
-
-\| Metric \| Description \|
-\|________\|_____________\|
-\| Frame P/R/F \| Piano_roll compared frame by frame at 10 ms resolution \|
-\| Note onset P/R/F \| Each detected note matched within ±50 ms onset tolerance \|
-\| Note+offset P/R/F \| Stricter — onset AND offset must both match \|
-
-### `report`
-
-```
-python _m nmf_cli report [OPTIONS]
-
-Options:
-  __std_mid  FILE   Standard NMF .mid from transcribe            [required]
-  __gs_mid   FILE   Group_Sparse NMF .mid from transcribe        [required]
-  __summary  FILE   summary.json from transcribe                 [required]
-  __out      FILE   Output .html file        [default: outputs/report.html]
-  __eval_json FILE  Optional evaluation scores JSON from evaluate
-```
-
-**Example:**
-```bash
-python _m nmf_cli report \
-    __std_mid outputs/piano_standard.mid \
-    __gs_mid  outputs/piano_group_sparse.mid \
-    __summary outputs/summary.json \
-    __out     outputs/report.html
-```
-
-Produces a single self_contained HTML file (no internet needed) with
-side_by_side piano rolls, convergence curves, sparsity stats table,
-and evaluation scores if provided.
-
-### `sheet`
-
-```
-python _m nmf_cli sheet [OPTIONS]
-
-Options:
-  __input  FILE   Input .mid file                                [required]
-  __out    FILE   Output MusicXML .xml file  [default: outputs/score.xml]
-  __title  TEXT   Score title                [default: NMF Transcription]
-  __pdf           Also attempt PDF via MuseScore (must be on PATH)
-```
-
-**Example:**
-```bash
-python _m nmf_cli sheet \
-    __input outputs/piano_group_sparse.mid \
-    __out   outputs/score.xml \
-    __title "My NMF Transcription"
-```
-
-Opens in MuseScore (free), Sibelius, Finale, or Flat.io.
-
-___
-
-## Complete Workflow
+From isolated single-note recordings (supervised, recommended). The pitch is
+read from each file name; MAPS names such as
+`MAPS_ISOL_NO_F_S0_M60_AkPnBcht.wav` work as-is, as do `note_60.wav`,
+`midi60.wav`, `piano_60.wav` and `C4.wav`. Sub-folders are searched, and
+several files for the same pitch (e.g. MAPS dynamics F/M/P) are pooled.
 
 ```bash
-# 1. Build harmonic dictionary
-python _m nmf_cli build_dict __harmonic __output dict.npy
-
-# 2. Transcribe both methods
-python _m nmf_cli transcribe \
-    __input piano.wav __method compare \
-    __out_dir outputs/
-
-# 3. Evaluate against ground truth (if available)
-python _m nmf_cli evaluate \
-    __predicted   outputs/piano_group_sparse.mid \
-    __compare_std outputs/piano_standard.mid \
-    __reference   ground_truth.mid \
-    __out_json    outputs/eval.json
-
-# 4. Generate HTML comparison report
-python _m nmf_cli report \
-    __std_mid outputs/piano_standard.mid \
-    __gs_mid  outputs/piano_group_sparse.mid \
-    __summary outputs/summary.json \
-    __eval_json outputs/eval.json \
-    __out     outputs/report.html
-
-# 5. Export sheet music
-python _m nmf_cli sheet \
-    __input outputs/piano_group_sparse.mid \
-    __out   outputs/score.xml
+python -m nmf_cli build-dict \
+    --audio-dir data/MAPS/ISOL/NO \
+    --pitch-range 21 108 \
+    --output dictionaries/piano.npy
 ```
 
-___
+This writes `dictionaries/piano.npy` (W, 288 x 176 for 88 pitches) and
+`dictionaries/piano.json`, the sidecar with `sr`, `hop_length`, `fmin`,
+`bins_per_octave`, `n_bins`, `bin_resolution_semitones`, and the pitch map
+(which W columns belong to which MIDI note).
 
-## Output Artifacts (complete list)
+Without recordings, a synthetic harmonic dictionary can be used (less
+accurate):
 
-```
-outputs/
-├── <name>_standard.mid         Standard NMF — playable MIDI
-├── <name>_group_sparse.mid     Group_Sparse NMF — playable MIDI
-├── <name>_standard_H.npz       Activation matrix H (K × T)
-├── <name>_group_sparse_H.npz   Piano roll matrix (n_notes × T)
-├── summary.json                Run config, convergence, sparsity stats
-├── eval.json                   Evaluation scores (P/R/F, frame + note)
-├── report.html                 Self_contained comparison report
-└── score.xml                   MusicXML sheet music
-```
-
-___
-
-## Troubleshooting
-
-### Dimension mismatch error
-```
-ERROR: Dimension mismatch: spectrogram V has 1025 frequency bins
-       but dictionary W has 512 rows.
-```
-**Fix:** Rebuild the dictionary with the same `__n_fft` you use for transcription.
-Both default to 2048, so this only happens if you manually changed one.
-
-### Missing dictionary sidecar
-```
-ERROR: Dictionary metadata sidecar missing: dict.json
-```
-**Fix:** The `.json` file must exist alongside the `.npy`. Rebuild the dictionary
-— both files are created together by `build_dict`.
-
-### No notes in MIDI output
-If the `.mid` file is empty, lower the `__threshold`:
 ```bash
-python _m nmf_cli transcribe __input audio.wav __threshold 0.05
+python -m nmf_cli build-dict --harmonic --output dictionaries/harmonic.npy
 ```
 
-### pretty_midi / librosa not found
+Other options: `--atoms-per-pitch` (default 2), `--sr`, `--hop-length`,
+`--fmin`, `--bins-per-octave`, `--n-bins`. Run `python -m nmf_cli build-dict -h`.
+
+### Transcribe
+
 ```bash
-pip install _e ".[dev]"
-# or
-uv sync
+python -m nmf_cli transcribe \
+    --input recordings/piece.wav \
+    --dict dictionaries/piano.npy \
+    --method compare \
+    --sparsity-weight 0.2 \
+    --threshold 0.1 \
+    --out-dir outputs/piece
 ```
 
-### Slow transcription on long files
-Group_sparse NMF on a 5_minute file can take 2–5 minutes.
-Use `__method standard` for faster results, or trim the audio to a short clip.
+| Flag | Meaning | Default |
+|---|---|---|
+| `--input` | polyphonic `.wav` / `.flac` (also `.ogg`, `.mp3`, `.aiff`) | required |
+| `--dict` | dictionary `.npy` from `build-dict` (sidecar must sit next to it) | required |
+| `--method` | `standard`, `group-sparse` or `compare` (both, sequentially) | `compare` |
+| `--sparsity-weight` | λ of the l1,2 penalty, ≥ 0 | `0.2` |
+| `--threshold` | Note-On threshold relative to the loudest activation, in (0, 1] | `0.1` |
+| `--out-dir` | where MIDI, `.npz` and `summary.json` go | `outputs` |
+| `--beta` | β-divergence of the group-sparse cost, in [0, 2] | `2` |
+| `--max-iter`, `--tol` | iteration cap and convergence tolerance | `500`, `1e-4` |
+| `--min-duration` | shortest note kept, seconds | `0.05` |
+
+The spectrogram settings always come from the dictionary sidecar, so the input
+is analysed exactly like the dictionary was built. After installation the same
+commands are also available as `nmf-transcriber build-dict ...` and
+`nmf-transcriber transcribe ...`.
+
+Tuning: raise `--threshold` if there are too many spurious notes, lower it if
+quiet notes are missed; raise `--sparsity-weight` (e.g. 0.3 to 0.5) to suppress
+more overtone ghosts, lower it if real notes of a chord disappear.
+
+## 4. Output artifacts
+
+For `--input piece.wav --method compare` the output directory contains:
+
+| File | Content |
+|---|---|
+| `piece_standard.mid` | standard NMF transcription, one piano track |
+| `piece_group_sparse.mid` | group-sparse NMF transcription |
+| `piece_standard_H.npz`, `piece_group_sparse_H.npz` | `H` (atoms x frames), `pitch_roll` (pitches x frames), `pitches`, `atom_pitch`, `times` (s), `sr`, `hop_length`, `notes` (JSON list) |
+| `summary.json` | execution log, below |
+
+`summary.json` records the full run configuration (all flags, spectrogram
+settings, dictionary shape and pitch range), input duration, and per method:
+`converged`, `iterations`, `max_iterations`, `solve_time_s`, `final_cost`,
+`relative_reconstruction_error`, `n_notes`, `pitches_detected`,
+`pitch_roll_hoyer_sparsity` and `mean_active_pitches_per_frame`. In compare
+mode a `comparison` block puts these side by side and lists pitches found by
+only one method. `processing_time_s` is the total wall-clock time.
+
+Load activations in Python:
+
+```python
+import numpy as np
+
+z = np.load("outputs/piece/piece_group_sparse_H.npz")
+roll, times, pitches = z["pitch_roll"], z["times"], z["pitches"]
+```
+
+## 5. Troubleshooting
+
+Errors are printed as one `Error: ...` line and the command exits with
+status 1; nothing is written to `--out-dir` for a failed run.
+
+| Message | Cause and fix |
+|---|---|
+| `Dimension mismatch: the dictionary has N frequency bins ... the input spectrogram has M` | The `.npy` and its `.json` sidecar come from different builds, or the `.npy` was edited. Rebuild with `build-dict` and keep both files together. |
+| `Dictionary metadata sidecar not found` | Copy the `.json` file that was created next to the `.npy`, or rebuild. |
+| `Dictionary file ... is corrupted` / `sidecar ... is corrupted or incomplete` | The file is truncated or not a NumPy array (e.g. a failed download). Rebuild. |
+| `Audio file not found` / `Cannot read audio file` | Check the path. A decoding failure means the file is damaged or in an unsupported codec; convert it to 16-bit WAV. |
+| `None of the ... audio files ... is named with a MIDI pitch` | `build-dict` could not find pitches in the file names; rename them like `note_60.wav` or use MAPS names. |
+| `--threshold must be in (0, 1]`, `--sparsity-weight must be >= 0` | Hyperparameter out of range. |
+| `ModuleNotFoundError: No module named 'nmf_core'` or `'librosa'` | The package is not installed in the active environment: activate the venv and run `pip install -e ".[dev]"`. |
+| `sndfile library not found` / `OSError: cannot load library 'libsndfile'` | On Linux install it with `sudo apt-get install libsndfile1`; the pip wheels bundle it on Windows and macOS. |
+| `.mp3` cannot be read | MP3 decoding needs ffmpeg on the system; convert to WAV/FLAC instead. |
+| Many short wrong notes | Raise `--threshold` or `--sparsity-weight`; make sure the dictionary was built from the same kind of piano. |
+| Unexpected error | Re-run with `python -m nmf_cli --debug transcribe ...` to see the traceback. |
+
+## References
+
+* K. O'Hanlon and M. D. Plumbley, "Polyphonic piano transcription using
+  non-negative matrix factorisation with group sparsity", ICASSP 2014.
+* P. Smaragdis and J. C. Brown, "Non-negative matrix factorization for
+  polyphonic music transcription", WASPAA 2003.
+* D. D. Lee and H. S. Seung, "Algorithms for non-negative matrix
+  factorization", NIPS 2001.
+* C. Févotte and J. Idier, "Algorithms for nonnegative matrix factorization
+  with the β-divergence", Neural Computation 2011.

@@ -1,119 +1,144 @@
-"""
-src/nmf_core/audio.py
-─────────────────────────────────────────────────────────────────
-Audio ingestion pipeline — load audio and compute magnitude spectrogram.
+"""Audio ingestion: load a file with librosa and compute the magnitude CQT.
 
-All NMF algorithms in this package consume a magnitude spectrogram V,
-not the raw waveform. This module is the single entry point for turning
-any WAV/FLAC/MP3 file into V.
+A constant-Q spectrogram is used because its bins are spaced in fractions of a
+semitone, which is what the dictionary metadata (``fmin``,
+``bins_per_octave``) describes and what makes one pitch's harmonics line up the
+same way for every note.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import librosa
 import numpy as np
 
+from .errors import AudioLoadError, DimensionMismatchError, ParameterError
 
-@dataclass
-class AudioSpec:
-    """All spectrogram data needed downstream by NMF solvers."""
-
-    V: np.ndarray        # (F, T)  magnitude spectrogram — NMF input
-    sr: int              # sample rate
-    n_fft: int
-    hop_length: int
-    freqs: np.ndarray    # (F,)  Hz per bin
-    times: np.ndarray    # (T,)  seconds per frame
-    duration_s: float
-    source_path: str
+SUPPORTED_EXTENSIONS = (".wav", ".flac", ".ogg", ".mp3", ".aif", ".aiff")
 
 
-# Default STFT parameters (matches librosa defaults)
-DEFAULT_N_FFT      = 2048
-DEFAULT_HOP_LENGTH = 512
+@dataclass(frozen=True)
+class SpectrogramConfig:
+    """Parameters that must match between a dictionary and the audio it is
+    applied to. Stored in the dictionary's JSON sidecar."""
+
+    sr: int = 22050
+    hop_length: int = 512
+    fmin: float = float(librosa.note_to_hz("A0"))  # 27.5 Hz, lowest piano key
+    bins_per_octave: int = 36  # 3 bins per semitone
+    n_bins: int = 288  # 8 octaves: A0 .. ~G#8
+
+    def __post_init__(self) -> None:
+        if self.sr <= 0 or self.hop_length <= 0:
+            raise ParameterError("sr and hop_length must be positive.")
+        if self.fmin <= 0 or self.bins_per_octave < 12 or self.n_bins <= 0:
+            raise ParameterError(
+                "fmin must be > 0, bins_per_octave >= 12 and n_bins > 0."
+            )
+        if self.bins_per_octave % 12:
+            raise ParameterError("bins_per_octave must be a multiple of 12.")
+        f_max = self.fmin * 2 ** (self.n_bins / self.bins_per_octave)
+        if f_max >= self.sr / 2:
+            raise ParameterError(
+                f"The CQT's top bin ({f_max:.0f} Hz) exceeds the Nyquist "
+                f"frequency ({self.sr / 2:.0f} Hz). Lower n_bins or raise sr."
+            )
+
+    @property
+    def bin_resolution_semitones(self) -> float:
+        return 12.0 / self.bins_per_octave
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["type"] = "cqt"
+        d["bin_resolution_semitones"] = self.bin_resolution_semitones
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SpectrogramConfig:
+        return cls(
+            sr=int(d["sr"]),
+            hop_length=int(d["hop_length"]),
+            fmin=float(d["fmin"]),
+            bins_per_octave=int(d["bins_per_octave"]),
+            n_bins=int(d["n_bins"]),
+        )
 
 
-def load_spectrogram(
-    audio_path: str | Path,
-    sr: int = 22050,
-    n_fft: int = DEFAULT_N_FFT,
-    hop_length: int = DEFAULT_HOP_LENGTH,
-    normalize: bool = False,
-) -> AudioSpec:
+def load_audio(path: str | Path, sr: int) -> np.ndarray:
+    """Load a mono waveform resampled to ``sr``.
+
+    Raises AudioLoadError for missing, unsupported, undecodable or empty files.
     """
-    Load audio and compute its magnitude spectrogram V.
-
-    Parameters
-    ----------
-    audio_path : path to WAV / FLAC / MP3
-    sr         : target sample rate (None = keep original)
-    n_fft      : FFT window size
-    hop_length : STFT hop in samples
-    normalize  : if True, divide V by its max (required for beta<1 divergence)
-
-    Returns
-    -------
-    AudioSpec with V, freqs, times, sr, etc.
-
-    Raises
-    ------
-    FileNotFoundError if the file does not exist.
-    ValueError       if the file cannot be decoded.
-    """
-    path = Path(audio_path)
+    path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Audio file not found: {path}")
-
+        raise AudioLoadError(f"Audio file not found: {path}")
+    if not path.is_file():
+        raise AudioLoadError(f"Audio path is not a file: {path}")
+    if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        raise AudioLoadError(
+            f"Unsupported audio format '{path.suffix}' for {path.name}. "
+            f"Use one of: {', '.join(SUPPORTED_EXTENSIONS)}."
+        )
     try:
-        y, sr_actual = librosa.load(str(path), sr=sr, mono=True)
-    except Exception as exc:
-        raise ValueError(f"Cannot decode audio file '{path}': {exc}") from exc
+        with warnings.catch_warnings():
+            # librosa warns before falling back to audioread; the failure
+            # itself is reported below.
+            warnings.simplefilter("ignore", UserWarning)
+            warnings.simplefilter("ignore", FutureWarning)
+            y, _ = librosa.load(path, sr=sr, mono=True)
+    except Exception as exc:  # librosa/soundfile raise many types
+        raise AudioLoadError(
+            f"Cannot read audio file {path}: {exc.__class__.__name__}: {exc}"
+        ) from exc
+    if y.size == 0:
+        raise AudioLoadError(f"Audio file contains no samples: {path}")
+    if not np.all(np.isfinite(y)):
+        raise AudioLoadError(f"Audio file contains NaN or infinite samples: {path}")
+    return y
 
-    D     = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
-    V     = np.abs(D).astype(np.float64)
-    freqs = librosa.fft_frequencies(sr=sr_actual, n_fft=n_fft)
-    times = librosa.frames_to_time(
-        np.arange(V.shape[1]), sr=sr_actual, hop_length=hop_length
-    )
 
-    if normalize:
-        v_max = V.max()
-        if v_max > 0:
-            V = V / v_max
+def spectrogram(y: np.ndarray, cfg: SpectrogramConfig) -> np.ndarray:
+    """Magnitude CQT, shape (n_bins, n_frames), dtype float64."""
+    with warnings.catch_warnings():
+        # librosa warns when a very short clip is shorter than an internal
+        # FFT after downsampling; the result is still valid.
+        warnings.filterwarnings("ignore", message="n_fft=.*too large")
+        C = librosa.cqt(
+            y,
+            sr=cfg.sr,
+            hop_length=cfg.hop_length,
+            fmin=cfg.fmin,
+            n_bins=cfg.n_bins,
+            bins_per_octave=cfg.bins_per_octave,
+        )
+    return np.abs(C).astype(np.float64)
 
-    return AudioSpec(
-        V=V,
-        sr=sr_actual,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        freqs=freqs,
-        times=times,
-        duration_s=float(len(y) / sr_actual),
-        source_path=str(path),
-    )
+
+def load_spectrogram(path: str | Path, cfg: SpectrogramConfig) -> np.ndarray:
+    """Load ``path`` and return its magnitude CQT V (F x T)."""
+    return spectrogram(load_audio(path, cfg.sr), cfg)
+
+
+def frame_times(n_frames: int, cfg: SpectrogramConfig) -> np.ndarray:
+    """Centre time in seconds of each spectrogram frame (frame * hop / sr)."""
+    return np.arange(n_frames) * cfg.hop_length / cfg.sr
 
 
 def validate_dimensions(V: np.ndarray, W: np.ndarray) -> None:
-    """
-    Assert that dictionary W is compatible with spectrogram V.
-
-    Raises ValueError with a clear human-readable message if not.
-    """
-    if W.ndim != 2:
-        raise ValueError(
-            f"Dictionary W must be 2-D (F x K), got shape {W.shape}."
+    """Check that dictionary W (F x K) can explain spectrogram V (F x T)."""
+    if W.ndim != 2 or V.ndim != 2:
+        raise DimensionMismatchError(
+            f"W and V must be 2-D, got W{W.shape} and V{V.shape}."
         )
-    if V.ndim != 2:
-        raise ValueError(
-            f"Spectrogram V must be 2-D (F x T), got shape {V.shape}."
-        )
-    if V.shape[0] != W.shape[0]:
-        raise ValueError(
-            f"Dimension mismatch: spectrogram V has {V.shape[0]} frequency bins "
-            f"but dictionary W has {W.shape[0]} rows. "
-            f"Rebuild the dictionary with the same n_fft and sample rate "
-            f"as the input audio (current n_fft produces {V.shape[0]} bins)."
+    if W.shape[0] != V.shape[0]:
+        raise DimensionMismatchError(
+            f"Dimension mismatch: the dictionary has {W.shape[0]} frequency "
+            f"bins per atom but the input spectrogram has {V.shape[0]}. "
+            "The dictionary was built with different spectrogram settings "
+            "(or its .npy and .json files come from different builds). "
+            "Rebuild it with build-dict."
         )

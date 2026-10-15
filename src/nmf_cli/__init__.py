@@ -1,1 +1,1 @@
-"""nmf_cli — Command-line interface for NMF Transcriber."""
+"""Command-line interface: ``python -m nmf_cli {build-dict,transcribe}``."""

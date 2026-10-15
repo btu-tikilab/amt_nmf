@@ -1,122 +1,155 @@
-"""tests/test_dictionary.py — dictionary serialization and validation."""
-from __future__ import annotations
+"""Dictionary building, serialization and corruption handling."""
+
+import json
 
 import numpy as np
 import pytest
 
-from nmf_core.audio import validate_dimensions
-from nmf_core.dictionary import (
+from conftest import PITCHES
+from nmf_core import (
+    Dictionary,
+    SpectrogramConfig,
     build_harmonic_dictionary,
     load_dictionary,
     save_dictionary,
 )
+from nmf_core.dictionary import pitch_from_filename, sidecar_path
+from nmf_core.errors import DictionaryError, ParameterError
 
 
 @pytest.fixture
-def sample_W():
-    rng = np.random.default_rng(1)
-    return rng.uniform(0, 1, (1025, 12)).astype(np.float64)
+def small_dict():
+    rng = np.random.default_rng(3)
+    return Dictionary(
+        W=rng.random((288, 6)),
+        config=SpectrogramConfig(),
+        pitch_map=[
+            {"midi": 60 + i, "note": f"n{i}", "columns": [2 * i, 2 * i + 1]}
+            for i in range(3)
+        ],
+    )
 
 
-@pytest.fixture
-def pitch_map():
-    return [
-        {"component": i, "midi_note": 60 + i, "note_name": f"note_{i}"}
-        for i in range(12)
-    ]
+def test_roundtrip_is_exact(tmp_path, small_dict):
+    npy, meta = save_dictionary(small_dict, tmp_path / "d.npy")
+    loaded = load_dictionary(npy)
+    np.testing.assert_array_equal(loaded.W, small_dict.W)
+    assert loaded.W.dtype == np.float64
+    assert loaded.config == small_dict.config
+    assert loaded.pitch_map == small_dict.pitch_map
+    assert loaded.groups == [[0, 1], [2, 3], [4, 5]]
 
 
-class TestSerialization:
-    def test_save_creates_npy(self, tmp_path, sample_W, pitch_map):
-        p = tmp_path / "test_dict.npy"
-        save_dictionary(sample_W, p, n_fft=2048, sr=22050,
-                        hop_length=512, pitch_map=pitch_map)
-        assert p.exists()
-
-    def test_save_creates_json_sidecar(self, tmp_path, sample_W, pitch_map):
-        p = tmp_path / "test_dict.npy"
-        save_dictionary(sample_W, p, n_fft=2048, sr=22050,
-                        hop_length=512, pitch_map=pitch_map)
-        assert p.with_suffix(".json").exists()
-
-    def test_roundtrip_exact(self, tmp_path, sample_W, pitch_map):
-        """Saving W and reloading must reproduce the exact numpy array."""
-        p = tmp_path / "dict.npy"
-        save_dictionary(sample_W, p, n_fft=2048, sr=22050,
-                        hop_length=512, pitch_map=pitch_map)
-        W_loaded, meta = load_dictionary(p)
-        np.testing.assert_array_equal(sample_W, W_loaded)
-
-    def test_metadata_fields(self, tmp_path, sample_W, pitch_map):
-        p = tmp_path / "dict.npy"
-        save_dictionary(sample_W, p, n_fft=2048, sr=22050,
-                        hop_length=512, pitch_map=pitch_map)
-        _, meta = load_dictionary(p)
-        assert meta["n_fft"]      == 2048
-        assert meta["sr"]         == 22050
-        assert meta["hop_length"] == 512
-        assert meta["F"]          == sample_W.shape[0]
-        assert meta["K"]          == sample_W.shape[1]
-
-    def test_pitch_map_preserved(self, tmp_path, sample_W, pitch_map):
-        p = tmp_path / "dict.npy"
-        save_dictionary(sample_W, p, n_fft=2048, sr=22050,
-                        hop_length=512, pitch_map=pitch_map)
-        _, meta = load_dictionary(p)
-        assert meta["pitch_map"] == pitch_map
-
-    def test_missing_npy_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError, match="not found"):
-            load_dictionary(tmp_path / "nonexistent.npy")
-
-    def test_missing_json_raises(self, tmp_path, sample_W, pitch_map):
-        p = tmp_path / "dict.npy"
-        np.save(str(p), sample_W)
-        # No JSON sidecar
-        with pytest.raises(FileNotFoundError, match="sidecar"):
-            load_dictionary(p)
+def test_sidecar_contains_spectrogram_metadata(tmp_path, small_dict):
+    _, meta = save_dictionary(small_dict, tmp_path / "d.npy")
+    m = json.loads(meta.read_text())
+    spec = m["spectrogram"]
+    for key in (
+        "sr",
+        "hop_length",
+        "fmin",
+        "bins_per_octave",
+        "n_bins",
+        "bin_resolution_semitones",
+    ):
+        assert key in spec
+    assert spec["bin_resolution_semitones"] == pytest.approx(1 / 3)
+    assert m["shape"] == [288, 6]
+    assert m["pitch_map"][0] == {"midi": 60, "note": "n0", "columns": [0, 1]}
 
 
-class TestDimensionValidation:
-    def test_correct_dims_passes(self):
-        V = np.ones((1025, 100))
-        W = np.ones((1025, 5))
-        validate_dimensions(V, W)   # should not raise
-
-    def test_mismatch_raises_clear_message(self):
-        V = np.ones((1025, 100))
-        W = np.ones((512, 5))      # wrong F
-        with pytest.raises(ValueError, match="Dimension mismatch"):
-            validate_dimensions(V, W)
-
-    def test_3d_W_raises(self):
-        V = np.ones((1025, 100))
-        W = np.ones((1025, 5, 2))
-        with pytest.raises(ValueError, match="2-D"):
-            validate_dimensions(V, W)
+def test_missing_files(tmp_path, small_dict):
+    with pytest.raises(DictionaryError, match="not found"):
+        load_dictionary(tmp_path / "nope.npy")
+    npy, meta = save_dictionary(small_dict, tmp_path / "d.npy")
+    meta.unlink()
+    with pytest.raises(DictionaryError, match="sidecar not found"):
+        load_dictionary(npy)
 
 
-class TestHarmonicDictionary:
-    def test_shape(self):
-        import librosa
-        freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
-        D, groups, pm = build_harmonic_dictionary(
-            freqs, midi_low=60, midi_high=67, n_harmonics=4
-        )
-        assert D.ndim == 2
-        assert D.shape[0] == len(freqs)
+def test_corrupted_npy(tmp_path, small_dict):
+    npy, _ = save_dictionary(small_dict, tmp_path / "d.npy")
+    npy.write_bytes(b"this is not a numpy file")
+    with pytest.raises(DictionaryError, match="corrupted"):
+        load_dictionary(npy)
 
-    def test_nonneg(self):
-        import librosa
-        freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
-        D, _, _ = build_harmonic_dictionary(freqs, midi_low=60, midi_high=67)
-        assert np.all(D >= 0)
 
-    def test_groups_cover_all_columns(self):
-        import librosa
-        freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
-        D, groups, _ = build_harmonic_dictionary(
-            freqs, midi_low=60, midi_high=67
-        )
-        all_cols = [c for g in groups for c in g]
-        assert sorted(all_cols) == list(range(D.shape[1]))
+def test_truncated_npy(tmp_path, small_dict):
+    npy, _ = save_dictionary(small_dict, tmp_path / "d.npy")
+    npy.write_bytes(npy.read_bytes()[:500])
+    with pytest.raises(DictionaryError):
+        load_dictionary(npy)
+
+
+def test_corrupted_sidecar(tmp_path, small_dict):
+    npy, meta = save_dictionary(small_dict, tmp_path / "d.npy")
+    meta.write_text("{ not json")
+    with pytest.raises(DictionaryError, match="corrupted"):
+        load_dictionary(npy)
+    meta.write_text(json.dumps({"pitch_map": []}))
+    with pytest.raises(DictionaryError, match="incomplete"):
+        load_dictionary(npy)
+
+
+def test_npy_and_sidecar_from_different_builds(tmp_path, small_dict):
+    npy, _ = save_dictionary(small_dict, tmp_path / "d.npy")
+    np.save(npy, small_dict.W[:, :4])
+    with pytest.raises(DictionaryError, match="do not belong together"):
+        load_dictionary(npy)
+
+
+def test_negative_values_rejected(tmp_path, small_dict):
+    npy, _ = save_dictionary(small_dict, tmp_path / "d.npy")
+    np.save(npy, -small_dict.W)
+    with pytest.raises(DictionaryError, match="negative"):
+        load_dictionary(npy)
+
+
+@pytest.mark.parametrize(
+    ("stem", "midi"),
+    [
+        ("MAPS_ISOL_NO_F_S0_M60_AkPnBcht", 60),
+        ("MAPS_ISOL_NO_M_S1_M21_ENSTDkAm", 21),
+        ("note_64", 64),
+        ("MIDI_108", 108),
+        ("piano_A4_69", 69),
+        ("72", 72),
+        ("piano_C4", 60),
+        ("Db5", 73),
+        ("ambience", None),
+    ],
+)
+def test_pitch_from_filename(stem, midi):
+    assert pitch_from_filename(stem) == midi
+
+
+def test_supervised_build(built_dict):
+    d = load_dictionary(built_dict)
+    assert d.pitches == PITCHES
+    assert d.W.shape == (288, 2 * len(PITCHES))
+    assert np.all(d.W >= 0)
+    np.testing.assert_allclose(np.linalg.norm(d.W, axis=0), 1.0)
+    # Each pitch's main atom peaks near its fundamental's CQT bin.
+    cfg = d.config
+    for p in d.pitch_map:
+        f0_bin = cfg.bins_per_octave * (p["midi"] - 21) / 12
+        peak = np.argmax(d.W[:, p["columns"][0]])
+        assert abs(peak - f0_bin) <= 1 or abs(peak - f0_bin - 36) <= 1
+
+
+def test_harmonic_build():
+    d = build_harmonic_dictionary((21, 108), atoms_per_pitch=3)
+    assert d.pitches == list(range(21, 109))
+    assert d.W.shape == (288, 88 * 3)
+    assert np.all(np.isfinite(d.W)) and np.all(d.W >= 0)
+
+
+def test_invalid_pitch_range():
+    with pytest.raises(ParameterError):
+        build_harmonic_dictionary((90, 20))
+    with pytest.raises(ParameterError):
+        build_harmonic_dictionary((0, 128))
+
+
+def test_sidecar_path():
+    assert sidecar_path("a/b/dict.npy").name == "dict.json"

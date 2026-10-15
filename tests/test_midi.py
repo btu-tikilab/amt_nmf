@@ -1,151 +1,126 @@
-"""tests/test_midi.py — MIDI generation tests."""
+"""Activation -> MIDI conversion."""
 
-from __future__ import annotations
+import json
 
 import numpy as np
 import pretty_midi
 import pytest
 
-from nmf_core.midi import activations_to_midi, save_activations_npz
+from nmf_core.errors import ParameterError
+from nmf_core.midi import (
+    frames_to_seconds,
+    pitch_activations,
+    roll_to_notes,
+    save_activations,
+    write_midi,
+)
 
 SR, HOP = 22050, 512
+FRAME = HOP / SR  # 23.2 ms
+
+
+def _bump(T, on, off, height=1.0, decay=0.02):
+    """Instant attack at frame ``on``, exponential decay, zero from ``off``."""
+    row = np.zeros(T)
+    n = off - on
+    row[on:off] = height * np.exp(-decay * np.arange(n))
+    return row
 
 
 @pytest.fixture
-def simple_H():
-    """H matrix with clear on/off pattern for 3 notes."""
-    H = np.zeros((3, 200))
-    H[0, 10:80] = 0.9  # note 60 active frames 10-80
-    H[1, 50:120] = 0.8  # note 64 active frames 50-120
-    H[2, 130:180] = 0.7  # note 67 active frames 130-180
-    return H
+def roll():
+    T = 200
+    return np.stack(
+        [
+            _bump(T, 10, 60),  # pitch 60: one note
+            _bump(T, 50, 120, 0.6),  # pitch 64: overlaps the first
+            _bump(T, 0, 40, 0.02) + 0.0,  # pitch 67: below threshold
+            _bump(T, 100, 130) + _bump(T, 140, 190, 0.8),  # 72: two attacks
+        ]
+    )
 
 
-@pytest.fixture
-def pitch_map():
-    return [
-        {"component": 0, "midi_note": 60, "note_name": "C4"},
-        {"component": 1, "midi_note": 64, "note_name": "E4"},
-        {"component": 2, "midi_note": 67, "note_name": "G4"},
-    ]
+def test_notes_pitches_and_timing(roll):
+    notes = roll_to_notes(roll, [60, 64, 67, 72], SR, HOP, threshold=0.1)
+    got = [(n.pitch, round(n.start / FRAME), round(n.end / FRAME)) for n in notes]
+    assert [g[0] for g in got] == [60, 64, 72, 72]
+    starts = {(p, s) for p, s, _ in got}
+    assert starts == {(60, 10), (64, 50), (72, 100), (72, 140)}
+    for n in notes:
+        assert 1 <= n.velocity <= 127 and n.end > n.start
 
 
-class TestMIDIGeneration:
-    def test_rejects_weak_pitch_relative_to_global_peak(self, tmp_path, pitch_map):
-        """A weak pitch should be rejected by the global peak filter."""
-        H = np.zeros((3, 200))
-        H[0, 10:80] = 1.0
-        H[1, 50:120] = 0.02
-        H[2, 130:180] = 0.8
-
-        out = tmp_path / "filtered.mid"
-        activations_to_midi(
-            H,
-            pitch_map,
-            SR,
-            HOP,
-            out,
-            threshold=0.5,
-            min_row_peak_ratio=0.1,
-        )
-
-        pm = pretty_midi.PrettyMIDI(str(out))
-        pitches = {
-            note.pitch for instrument in pm.instruments for note in instrument.notes
-        }
-
-        assert 60 in pitches
-        assert 67 in pitches
-        assert 64 not in pitches
-
-    def test_creates_file(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "test.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out)
-        assert out.exists()
-
-    def test_file_is_valid_midi(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "test.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        assert len(pm.instruments) >= 1
-
-    def test_file_is_nonempty(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "test.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        all_notes = [n for inst in pm.instruments for n in inst.notes]
-        assert len(all_notes) > 0
-
-    def test_expected_pitches_present(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "test.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        pitches = {n.pitch for inst in pm.instruments for n in inst.notes}
-        assert 60 in pitches  # C4
-        assert 64 in pitches  # E4
-        assert 67 in pitches  # G4
-
-    def test_note_timing_approximate(self, tmp_path, simple_H, pitch_map):
-        """C4 should start around frame 10 * hop/sr = ~0.23s."""
-        out = tmp_path / "test.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out, threshold=0.5)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        c4 = [n for inst in pm.instruments for n in inst.notes if n.pitch == 60]
-        assert len(c4) >= 1
-        expected_start = 10 * HOP / SR
-        assert abs(c4[0].start - expected_start) < 0.1
-
-    def test_zero_H_produces_no_notes(self, tmp_path, pitch_map):
-        H_zero = np.zeros((3, 100))
-        out = tmp_path / "silent.mid"
-        activations_to_midi(H_zero, pitch_map, SR, HOP, out, threshold=0.1)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        all_notes = [n for inst in pm.instruments for n in inst.notes]
-        assert len(all_notes) == 0
-
-    def test_velocity_in_valid_range(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "vel.mid"
-        activations_to_midi(simple_H, pitch_map, SR, HOP, out)
-        pm = pretty_midi.PrettyMIDI(str(out))
-        for inst in pm.instruments:
-            for n in inst.notes:
-                assert 0 <= n.velocity <= 127
-
-    def test_hysteresis_keeps_note_active_through_brief_dip(self, tmp_path, pitch_map):
-        """A short dip below the start threshold should not split a note."""
-        H = np.zeros((3, 100))
-        H[0, 10:30] = 0.9
-        H[0, 30:32] = 0.3  # Brief dip
-        H[0, 32:50] = 0.9
-
-        out = tmp_path / "hysteresis.mid"
-        activations_to_midi(
-            H,
-            pitch_map,
-            SR,
-            HOP,
-            out,
-            threshold=0.5,
-            min_note_dur_s=0.03,
-            release_threshold=0.25,
-        )
-
-        pm = pretty_midi.PrettyMIDI(str(out))
-        c4 = [n for inst in pm.instruments for n in inst.notes if n.pitch == 60]
-
-        assert len(c4) == 1
-        assert c4[0].start <= 10 * HOP / SR
-        assert c4[0].end >= 50 * HOP / SR
+def test_repeated_note_without_silence_retriggers():
+    T = 120
+    row = _bump(T, 10, 120, 1.0, decay=0.03)
+    row[60:] += _bump(T, 60, 120, 0.9, decay=0.03)[60:]  # re-attack, no gap
+    notes = roll_to_notes(row[None], [60], SR, HOP, threshold=0.1)
+    assert [round(n.start / FRAME) for n in notes] == [10, 60]
+    assert notes[0].end == pytest.approx(notes[1].start)
 
 
-class TestNPZExport:
-    def test_creates_npz(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "activations.npz"
-        save_activations_npz(simple_H, pitch_map, out)
-        assert out.exists()
+def test_note_off_uses_hysteresis():
+    row = np.zeros(100)
+    row[10:20] = 1.0
+    row[20:40] = 0.07  # below threshold 0.1 but above off level 0.05
+    row[40:50] = 0.03  # below off level
+    (note,) = roll_to_notes(row[None], [60], SR, HOP, threshold=0.1)
+    assert round(note.start / FRAME) == 10 and round(note.end / FRAME) == 40
 
-    def test_H_reloadable(self, tmp_path, simple_H, pitch_map):
-        out = tmp_path / "activations.npz"
-        save_activations_npz(simple_H, pitch_map, out)
-        data = np.load(str(out), allow_pickle=True)
-        np.testing.assert_array_equal(data["H"], simple_H)
+
+def test_threshold_and_min_duration():
+    row = np.zeros(100)
+    row[10:12] = 1.0  # 46 ms
+    row[50:80] = 0.5
+    assert len(roll_to_notes(row[None], [60], SR, HOP, 0.1, min_duration=0.05)) == 1
+    assert len(roll_to_notes(row[None], [60], SR, HOP, 0.6)) == 0
+    assert len(roll_to_notes(row[None], [60], SR, HOP, 0.6, min_duration=0)) == 1
+    assert roll_to_notes(np.zeros((1, 50)), [60], SR, HOP) == []
+    for bad in (0.0, -0.1, 1.5, float("nan")):
+        with pytest.raises(ParameterError):
+            roll_to_notes(row[None], [60], SR, HOP, threshold=bad)
+
+
+def test_frame_to_time_conversion():
+    assert frames_to_seconds(43, 22050, 512) == pytest.approx(43 * 512 / 22050)
+    row = np.zeros(400)
+    row[100:200] = 1.0
+    (note,) = roll_to_notes(row[None], [60], 44100, 256)
+    assert note.start == pytest.approx(100 * 256 / 44100)
+    assert note.end == pytest.approx(200 * 256 / 44100)
+
+
+def test_pitch_activations_sums_groups():
+    H = np.arange(12.0).reshape(4, 3)
+    np.testing.assert_array_equal(
+        pitch_activations(H, [[0, 1], [2, 3]]), [[3, 5, 7], [15, 17, 19]]
+    )
+
+
+def test_written_midi_is_valid(tmp_path, roll):
+    notes = roll_to_notes(roll, [60, 64, 67, 72], SR, HOP)
+    path = write_midi(notes, tmp_path / "x.mid")
+    pm = pretty_midi.PrettyMIDI(str(path))
+    written = pm.instruments[0].notes
+    assert len(written) == len(notes) > 0
+    for w, n in zip(
+        sorted(written, key=lambda x: (x.start, x.pitch)), notes, strict=True
+    ):
+        assert w.pitch == n.pitch
+        assert w.start == pytest.approx(n.start, abs=2e-3)
+        assert w.end == pytest.approx(n.end, abs=2e-3)
+
+
+def test_npz_contents(tmp_path, roll):
+    H = np.repeat(roll, 2, axis=0) / 2
+    groups = [[0, 1], [2, 3], [4, 5], [6, 7]]
+    notes = roll_to_notes(roll, [60, 64, 67, 72], SR, HOP)
+    p = save_activations(
+        tmp_path / "h.npz", H, roll, [60, 64, 67, 72], groups, SR, HOP, notes
+    )
+    z = np.load(p)
+    np.testing.assert_array_equal(z["H"], H)
+    np.testing.assert_array_equal(z["pitch_roll"], roll)
+    assert list(z["atom_pitch"]) == [60, 60, 64, 64, 67, 67, 72, 72]
+    assert z["times"][1] == pytest.approx(FRAME)
+    assert len(json.loads(str(z["notes"]))) == len(notes)

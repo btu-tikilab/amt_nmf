@@ -1,343 +1,360 @@
-"""
-src/nmf_core/dictionary.py
-─────────────────────────────────────────────────────────────────
-Dictionary Management Subsystem.
+"""Dictionary management: build, save and load the pitch dictionary W.
 
-Two ways to build a dictionary W:
+A dictionary is two files side by side:
 
-A) Supervised (preferred) — extract from isolated single-note recordings.
-   Each note clip
-   NMF with K=1 -> the one W column is that note's
-   spectral fingerprint.  Much cleaner than unsupervised because the
-   algorithm has exactly one note to represent.
-
-B) Harmonic (fast, no audio needed) — build Gaussian harmonic atoms
-   from musical physics (same approach as group_snmf/).
-
-The dictionary is stored as two files:
-  <name>.npy   — the W matrix (float64, F × K)
-  <name>.json  — metadata sidecar (n_fft, sr, hop_length, pitch_map)
+* ``<name>.npy``  - W, float64, shape (n_bins, n_pitches * atoms_per_pitch)
+* ``<name>.json`` - sidecar with the spectrogram configuration (sr, hop_length,
+  fmin, bins_per_octave, n_bins, bin resolution) and the pitch mapping, i.e.
+  which columns of W belong to which MIDI pitch. Transcription computes the
+  input spectrogram from this configuration, so W and V always agree.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import librosa
 import numpy as np
 
-from .audio import load_spectrogram
-from .standard_nmf import run_nmf
+from .audio import (
+    SUPPORTED_EXTENSIONS,
+    SpectrogramConfig,
+    load_audio,
+    spectrogram,
+)
+from .errors import AudioLoadError, DictionaryError, ParameterError
+from .nmf import EPS, standard_nmf
 
-# ── metadata sidecar ──────────────────────────────────────────────────────────
+FORMAT_VERSION = 1
 
 
-def _meta_path(npy_path: str | Path) -> Path:
-    p = Path(npy_path)
-    return p.with_suffix(".json")
+@dataclass
+class Dictionary:
+    W: np.ndarray
+    config: SpectrogramConfig
+    pitch_map: list[dict]  # [{"midi": 60, "note": "C4", "columns": [0, 1]}, ...]
+    extra: dict = field(default_factory=dict)
+
+    @property
+    def pitches(self) -> list[int]:
+        return [int(p["midi"]) for p in self.pitch_map]
+
+    @property
+    def groups(self) -> list[list[int]]:
+        return [list(p["columns"]) for p in self.pitch_map]
+
+    def metadata(self) -> dict:
+        return {
+            "format_version": FORMAT_VERSION,
+            "shape": list(self.W.shape),
+            "spectrogram": self.config.to_dict(),
+            "pitch_range": [min(self.pitches), max(self.pitches)],
+            "n_pitches": len(self.pitch_map),
+            "pitch_map": self.pitch_map,
+            **self.extra,
+        }
 
 
-def save_dictionary(
-    W: np.ndarray,
-    path: str | Path,
-    n_fft: int,
-    sr: int,
-    hop_length: int,
-    pitch_map: List[Dict],
-) -> None:
-    """
-    Save dictionary matrix W + JSON sidecar.
+def sidecar_path(npy_path: str | Path) -> Path:
+    return Path(npy_path).with_suffix(".json")
 
-    pitch_map: list of {"component": k, "midi_note": m, "note_name": n}
-    """
+
+def save_dictionary(d: Dictionary, path: str | Path) -> tuple[Path, Path]:
+    """Write W to ``path`` (.npy) and the metadata to the .json sidecar."""
     path = Path(path)
+    if path.suffix.lower() != ".npy":
+        raise ParameterError(f"Dictionary output must end in .npy, got {path}.")
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    np.save(str(path), W.astype(np.float64))
-
-    meta = {
-        "n_fft": n_fft,
-        "sr": sr,
-        "hop_length": hop_length,
-        "F": int(W.shape[0]),
-        "K": int(W.shape[1]),
-        "pitch_map": pitch_map,
-    }
-    with open(_meta_path(path), "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
-
-    print(f"  Dictionary saved -> {path}  ({W.shape[0]}x{W.shape[1]})")
-    print(f"  Metadata   saved -> {_meta_path(path)}")
+    np.save(path, np.asarray(d.W, dtype=np.float64), allow_pickle=False)
+    meta = sidecar_path(path)
+    meta.write_text(json.dumps(d.metadata(), indent=2), encoding="utf-8")
+    return path, meta
 
 
-def load_dictionary(path: str | Path) -> tuple[np.ndarray, dict]:
-    """
-    Load dictionary W and its metadata sidecar.
+def load_dictionary(path: str | Path) -> Dictionary:
+    """Load and validate a dictionary saved by ``save_dictionary``.
 
-    Returns (W, meta_dict).
-    Raises FileNotFoundError if either file is missing.
-    Raises ValueError if the .npy is corrupt.
+    Raises DictionaryError with a readable message if either file is missing,
+    unreadable, corrupted or inconsistent with the other.
     """
     path = Path(path)
-    meta_p = _meta_path(path)
-
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Dictionary file not found: {path}\n"
-            f"Run:  python -m nmf_cli build-dict  to create one."
+    rebuild = "Rebuild it with: python -m nmf_cli build-dict"
+    if not path.is_file():
+        raise DictionaryError(f"Dictionary file not found: {path}. {rebuild}")
+    meta_path = sidecar_path(path)
+    if not meta_path.is_file():
+        raise DictionaryError(
+            f"Dictionary metadata sidecar not found: {meta_path}. "
+            f"The .json file must sit next to the .npy file. {rebuild}"
         )
-    if not meta_p.exists():
-        raise FileNotFoundError(
-            f"Dictionary metadata sidecar missing: {meta_p}\n"
-            f"Rebuild the dictionary — the .json sidecar is required."
-        )
-
     try:
-        W = np.load(str(path)).astype(np.float64)
+        W = np.load(path, allow_pickle=False)
     except Exception as exc:
-        raise ValueError(f"Cannot read dictionary file '{path}': {exc}") from exc
-
-    with open(meta_p, encoding="utf-8") as f:
-        meta = json.load(f)
-
-    # Verify stored shape matches the file
-    if W.shape != (meta["F"], meta["K"]):
-        raise ValueError(
-            f"Shape mismatch: file says ({meta['F']}, {meta['K']}) "
-            f"but loaded array is {W.shape}. The .npy may be corrupt."
+        raise DictionaryError(
+            f"Dictionary file {path} is corrupted or not a NumPy .npy array "
+            f"({exc.__class__.__name__}: {exc}). {rebuild}"
+        ) from exc
+    if W.ndim != 2 or W.size == 0 or not np.issubdtype(W.dtype, np.number):
+        raise DictionaryError(
+            f"Dictionary {path} must be a non-empty 2-D numeric array, "
+            f"got shape {W.shape} dtype {W.dtype}."
         )
+    W = W.astype(np.float64)
+    if not np.all(np.isfinite(W)) or np.any(W < 0):
+        raise DictionaryError(
+            f"Dictionary {path} contains negative, NaN or infinite values."
+        )
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        config = SpectrogramConfig.from_dict(meta["spectrogram"])
+        pitch_map = meta["pitch_map"]
+        columns = [int(c) for p in pitch_map for c in p["columns"]]
+        [int(p["midi"]) for p in pitch_map]
+    except (ValueError, KeyError, TypeError, ParameterError) as exc:
+        raise DictionaryError(
+            f"Dictionary sidecar {meta_path} is corrupted or incomplete "
+            f"({exc.__class__.__name__}: {exc}). {rebuild}"
+        ) from exc
+    if sorted(columns) != list(range(W.shape[1])):
+        raise DictionaryError(
+            f"Dictionary {path} has {W.shape[1]} atoms but its sidecar maps "
+            f"{len(columns)} columns to pitches. The .npy and .json files do "
+            f"not belong together. {rebuild}"
+        )
+    extra = {
+        k: v
+        for k, v in meta.items()
+        if k
+        not in {
+            "format_version",
+            "shape",
+            "spectrogram",
+            "pitch_range",
+            "n_pitches",
+            "pitch_map",
+        }
+    }
+    return Dictionary(W=W, config=config, pitch_map=pitch_map, extra=extra)
 
-    return W, meta
+
+# ── filename -> MIDI pitch ────────────────────────────────────────────────────
+
+_PITCH_PATTERNS = (
+    re.compile(r"(?:^|_)M(\d{1,3})(?:_|$)"),  # MAPS: MAPS_ISOL_NO_F_S0_M60_...
+    re.compile(r"midi[_-]?(\d{1,3})", re.IGNORECASE),  # midi60, MIDI_060
+    re.compile(r"note[_-]?(\d{1,3})", re.IGNORECASE),  # note60, note_60
+    re.compile(r"(?:^|[_\-. ])(\d{1,3})$"),  # piano_60, 060
+    re.compile(r"^(\d{1,3})(?:[_\-. ]|$)"),  # 60_piano
+)
+_NOTE_NAME = re.compile(r"(?:^|[_\-. ])([A-Ga-g][#b]?-?\d)(?:[_\-. ]|$)")
 
 
-# ── supervised builder ────────────────────────────────────────────────────────
+def pitch_from_filename(stem: str) -> int | None:
+    """Parse a MIDI pitch from a file name stem, or return None.
+
+    Understands MAPS names (``..._M60_...``), ``midi60``, ``note_60``,
+    a trailing or leading number (``piano_60``) and note names (``piano_C4``,
+    ``Db5``).
+    """
+    for pat in _PITCH_PATTERNS:
+        m = pat.search(stem)
+        if m and 0 <= int(m.group(1)) <= 127:
+            return int(m.group(1))
+    m = _NOTE_NAME.search(stem)
+    if m:
+        try:
+            midi = int(librosa.note_to_midi(m.group(1)))
+        except Exception:  # librosa raises ParameterError on bad names
+            return None
+        if 0 <= midi <= 127:
+            return midi
+    return None
+
+
+# ── builders ──────────────────────────────────────────────────────────────────
+
+
+def _validate_pitch_range(pitch_range: tuple[int, int]) -> tuple[int, int]:
+    lo, hi = (int(p) for p in pitch_range)
+    if not 0 <= lo <= hi <= 127:
+        raise ParameterError(
+            f"Invalid pitch range {lo}..{hi}: need 0 <= min <= max <= 127."
+        )
+    return lo, hi
+
+
+def _normalise_columns(W: np.ndarray) -> np.ndarray:
+    return W / (np.linalg.norm(W, axis=0, keepdims=True) + EPS)
 
 
 def build_from_audio_dir(
     audio_dir: str | Path,
-    output_path: str | Path,
     pitch_range: tuple[int, int] = (21, 108),
-    n_fft: int = 2048,
-    hop_length: int = 512,
-    sr: int = 22050,
-    n_iter: int = 100,
-    verbose: bool = True,
-) -> np.ndarray:
+    atoms_per_pitch: int = 2,
+    config: SpectrogramConfig | None = None,
+    max_iter: int = 200,
+    log=None,
+) -> Dictionary:
+    """Supervised dictionary from isolated single-note recordings.
+
+    Files are matched to pitches by name (see ``pitch_from_filename``); several
+    files for one pitch (e.g. MAPS dynamics F/M/P) are pooled. For each pitch
+    the clips' spectrograms are concatenated and factorised with Euclidean NMF
+    into ``atoms_per_pitch`` unit-norm spectral atoms, which form that pitch's
+    group of columns in W.
+
+    ``log`` is an optional callable receiving progress strings.
     """
-    Build a supervised dictionary from a folder of isolated single-note WAVs.
-
-    File-naming convention (MAPS-compatible):
-        MIDI_<note>.wav  or  <any_prefix>_M<note>.wav
-    Any file whose name contains the MIDI note number is accepted.
-    If the MIDI note cannot be parsed from the filename, the file is
-    assigned the next available MIDI number sequentially.
-
-    For each file:
-        1. Load audio -> magnitude spectrogram V  (F × T)
-        2. Run NMF with K=1 to get the dominant spectral template
-        3. Store the single W column as the note's fingerprint
-
-    Parameters
-    ----------
-    audio_dir   : folder containing single-note WAV/FLAC files
-    output_path : where to save the .npy + .json
-    pitch_range : (midi_low, midi_high) — only notes in this range are kept
-    """
+    config = config or SpectrogramConfig()
+    lo, hi = _validate_pitch_range(pitch_range)
+    if atoms_per_pitch < 1:
+        raise ParameterError("atoms_per_pitch must be >= 1.")
     audio_dir = Path(audio_dir)
-    if not audio_dir.exists():
-        raise FileNotFoundError(f"Audio directory not found: {audio_dir}")
-
-    # Collect audio files
-    exts = {".wav", ".flac", ".mp3", ".ogg"}
-    files = sorted(p for p in audio_dir.iterdir() if p.suffix.lower() in exts)
+    if not audio_dir.is_dir():
+        raise AudioLoadError(f"Audio directory not found: {audio_dir}")
+    files = sorted(
+        p
+        for p in audio_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
     if not files:
-        raise ValueError(
-            f"No audio files found in {audio_dir}. Expected .wav / .flac / .mp3 files."
+        raise AudioLoadError(
+            f"No audio files ({', '.join(SUPPORTED_EXTENSIONS)}) in {audio_dir}."
         )
 
-    midi_low, midi_high = pitch_range
-    columns: List[np.ndarray] = []
-    pitch_map: List[Dict] = []
-    F: Optional[int] = None
-
-    for file_path in files:
-        # Try to parse MIDI note from filename
-        midi_note = _midi_from_filename(file_path.stem)
-        if midi_note is None or not (midi_low <= midi_note <= midi_high):
-            if verbose:
-                print(
-                    f"  Skipping {file_path.name} "
-                    f"(MIDI {midi_note} outside range {pitch_range})"
-                )
-            continue
-
-        if verbose:
-            note_name = librosa.midi_to_note(midi_note)
-            print(f"  Processing {file_path.name}  ->  MIDI {midi_note} ({note_name})")
-
-        try:
-            spec = load_spectrogram(
-                file_path, sr=sr, n_fft=n_fft, hop_length=hop_length
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            if verbose:
-                print(f"    WARNING: skipping ({exc})")
-            continue
-
-        if F is None:
-            F = spec.V.shape[0]
-
-        # NMF with K=1 -> extract single spectral basis vector
-        result = run_nmf(
-            spec.V,
-            K=1,
-            n_iter=n_iter,
-            verbose=False,
-            progress_callback=None,
+    by_pitch: dict[int, list[Path]] = defaultdict(list)
+    unparsed = []
+    for f in files:
+        midi = pitch_from_filename(f.stem)
+        if midi is None:
+            unparsed.append(f.name)
+        elif lo <= midi <= hi:
+            by_pitch[midi].append(f)
+    if unparsed and log:
+        log(
+            f"Skipped {len(unparsed)} file(s) with no pitch in the name, "
+            f"e.g. {unparsed[0]}"
         )
-        w_col = result.W[:, 0]  # (F,)
-        w_col /= w_col.max() + 1e-10  # normalise to [0,1]
-        columns.append(w_col)
+    if not by_pitch:
+        raise AudioLoadError(
+            f"None of the {len(files)} audio files in {audio_dir} is named with "
+            f"a MIDI pitch inside {lo}..{hi} (expected e.g. "
+            "'MAPS_ISOL_NO_F_S0_M60_AkPnBcht.wav', 'note_60.wav' or 'C4.wav')."
+        )
 
-        note_name = librosa.midi_to_note(midi_note)
+    columns, pitch_map, skipped = [], [], []
+    for midi in sorted(by_pitch):
+        specs = []
+        for f in by_pitch[midi]:
+            try:
+                y = load_audio(f, config.sr)
+            except AudioLoadError as exc:
+                skipped.append(f"{f.name} ({exc})")
+                continue
+            y, _ = librosa.effects.trim(y, top_db=60)
+            V = spectrogram(y, config)
+            if V.max() > 0:
+                specs.append(V / V.max())
+        if not specs:
+            continue
+        V = np.concatenate(specs, axis=1)
+        k = min(atoms_per_pitch, V.shape[1])
+        res = standard_nmf(V, n_components=k, max_iter=max_iter, seed=midi)
+        # Order atoms by total activation so atom 0 is the dominant spectrum.
+        order = np.argsort(-res.H.sum(axis=1))
+        atoms = _normalise_columns(res.W[:, order])
+        if k < atoms_per_pitch:  # very short clip: repeat the dominant atom
+            atoms = np.repeat(atoms[:, :1], atoms_per_pitch, axis=1)
+        start = sum(a.shape[1] for a in columns)
+        columns.append(atoms)
         pitch_map.append(
             {
-                "component": len(columns) - 1,
-                "midi_note": int(midi_note),
-                "note_name": note_name,
-                "source": file_path.name,
+                "midi": midi,
+                "note": librosa.midi_to_note(midi, unicode=False),
+                "columns": list(range(start, start + atoms_per_pitch)),
+                "sources": [f.name for f in by_pitch[midi]],
             }
         )
-
+        if log:
+            log(
+                f"  MIDI {midi:3d} ({pitch_map[-1]['note']:>4}): "
+                f"{len(specs)} clip(s), {atoms_per_pitch} atom(s)"
+            )
+    for s in skipped:
+        if log:
+            log(f"  Skipped unreadable file: {s}")
     if not columns:
-        raise ValueError(
-            "No valid audio files produced dictionary columns. "
-            "Check that filenames contain MIDI note numbers and "
-            "that files are readable."
-        )
+        raise AudioLoadError(f"No readable audio files in {audio_dir}.")
 
-    W = np.stack(columns, axis=1)  # (F, K)
-
-    save_dictionary(
-        W,
-        output_path,
-        n_fft=n_fft,
-        sr=sr,
-        hop_length=hop_length,
+    return Dictionary(
+        W=np.concatenate(columns, axis=1),
+        config=config,
         pitch_map=pitch_map,
+        extra={
+            "source": "supervised",
+            "audio_dir": str(audio_dir),
+            "atoms_per_pitch": atoms_per_pitch,
+            "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
     )
-    if verbose:
-        print(f"\n  Built dictionary: {W.shape[0]} freq bins × {W.shape[1]} notes")
-
-    return W
-
-
-# ── harmonic dictionary builder ───────────────────────────────────────────────
-
 
 
 def build_harmonic_dictionary(
-    freqs: np.ndarray,
-    midi_low: int = 21,
-    midi_high: int = 108,
-    n_harmonics: int = 6,
-    sigma_hz: float = 8.0,
-) -> tuple[np.ndarray, List[List[int]], List[Dict]]:
+    pitch_range: tuple[int, int] = (21, 108),
+    atoms_per_pitch: int = 2,
+    config: SpectrogramConfig | None = None,
+    n_harmonics: int = 20,
+    inharmonicity: float = 1e-4,
+) -> Dictionary:
+    """Synthetic dictionary when no recordings are available.
+
+    Each atom is a harmonic comb in the CQT domain: Gaussian peaks (one bin
+    wide) at the stretched partials f_h = h f0 sqrt(1 + B h^2) of a piano
+    string. Atom ``a`` of a pitch uses amplitudes h^-(0.5 + a), so the group
+    spans brighter (attack) and duller (decay) timbres.
     """
-    Build one combined harmonic template per MIDI note.
-
-    Returns:
-      D:         (F, K) dictionary, one column per note
-      groups:    singleton column-index lists, one per note
-      pitch_map: one metadata entry per note
-    """
-    templates: List[np.ndarray] = []
-    groups: List[List[int]] = []
-    pitch_map: List[Dict] = []
-
-    freqs = np.asarray(freqs, dtype=np.float64)
-
-    if freqs.ndim != 1 or freqs.size == 0:
-        raise ValueError("freqs must be a non-empty 1-D array.")
-
-    if not np.all(np.isfinite(freqs)):
-        raise ValueError("freqs must contain only finite values.")
-
-    if np.any(freqs < 0) or np.any(np.diff(freqs) < 0):
-        raise ValueError("freqs must be nonnegative and sorted in ascending order.")
-
-    if not 0 <= midi_low <= midi_high <= 127:
-        raise ValueError("MIDI range must satisfy 0 <= midi_low <= midi_high <= 127.")
-
-    if n_harmonics < 1:
-        raise ValueError("n_harmonics must be at least 1.")
-
-    if not np.isfinite(sigma_hz) or sigma_hz <= 0:
-        raise ValueError("sigma_hz must be a positive finite number.")
-
-    for m in range(midi_low, midi_high + 1):
-        f0 = float(librosa.midi_to_hz(m))
-        template = np.zeros_like(freqs, dtype=np.float64)
-
-        for h in range(1, n_harmonics + 1):
-            f_h = h * f0
-            if f_h > freqs[-1]:
-                break
-
-            harmonic = (1.0 / h) * np.exp(
-                -0.5 * ((freqs - f_h) / sigma_hz) ** 2
-            )
-            template += harmonic
-
-        norm = np.linalg.norm(template)
-        if norm <= 1e-12:
+    config = config or SpectrogramConfig()
+    lo, hi = _validate_pitch_range(pitch_range)
+    if atoms_per_pitch < 1 or n_harmonics < 1:
+        raise ParameterError("atoms_per_pitch and n_harmonics must be >= 1.")
+    bins = np.arange(config.n_bins)
+    f_top = config.fmin * 2 ** ((config.n_bins - 1) / config.bins_per_octave)
+    columns, pitch_map = [], []
+    for midi in range(lo, hi + 1):
+        f0 = float(librosa.midi_to_hz(midi))
+        h = np.arange(1, n_harmonics + 1)
+        fh = h * f0 * np.sqrt(1 + inharmonicity * h**2)
+        keep = (fh >= config.fmin) & (fh <= f_top)
+        if not np.any(keep):
             continue
-
-        template /= norm
-        component = len(templates)
-        templates.append(template)
-        groups.append([component])
-
+        pos = config.bins_per_octave * np.log2(fh[keep] / config.fmin)
+        peaks = np.exp(-0.5 * (bins[:, None] - pos[None, :]) ** 2)
+        atoms = np.stack(
+            [peaks @ h[keep] ** -(0.5 + a) for a in range(atoms_per_pitch)], axis=1
+        )
+        start = len(pitch_map) * atoms_per_pitch
+        columns.append(_normalise_columns(atoms))
         pitch_map.append(
             {
-                "component": component,
-                "midi_note": int(m),
-                "note_name": librosa.midi_to_note(m),
+                "midi": midi,
+                "note": librosa.midi_to_note(midi, unicode=False),
+                "columns": list(range(start, start + atoms_per_pitch)),
             }
         )
-
-    if not templates:
-        raise ValueError("No harmonic templates could be generated.")
-
-    D = np.stack(templates, axis=1).astype(np.float64)
-    return D, groups, pitch_map
-
-
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-
-def _midi_from_filename(stem: str) -> Optional[int]:
-    """
-    Parse MIDI note number from common filename patterns:
-      piano_A4_69.wav -> 69
-      MIDI_060.wav    -> 60
-      note60.wav      -> 60
-    """
-    import re
-
-    # Pattern: ends with _<number> or contains MIDI_<number>
-    patterns = [
-        r"_M?(\d{1,3})$",
-        r"MIDI[_-]?(\d{1,3})",
-        r"note[_-]?(\d{1,3})",
-        r"(\d{1,3})$",
-    ]
-    for pat in patterns:
-        m = re.search(pat, stem, re.IGNORECASE)
-        if m:
-            val = int(m.group(1))
-            if 21 <= val <= 108:
-                return val
-    return None
+    if not columns:
+        raise ParameterError("No pitch in the range falls inside the CQT range.")
+    return Dictionary(
+        W=np.concatenate(columns, axis=1),
+        config=config,
+        pitch_map=pitch_map,
+        extra={
+            "source": "harmonic",
+            "atoms_per_pitch": atoms_per_pitch,
+            "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
+    )
