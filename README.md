@@ -104,6 +104,25 @@ are also available. `λ` is `--sparsity-weight`; λ = 0 gives back standard NMF.
 
 ## 3. Usage
 
+### Quick demo (no dataset needed)
+
+`scripts/make_demo_audio.py` synthesizes 88 piano-like single notes with
+MAPS-style names and a 4-second polyphonic piece, so the whole pipeline can be
+tried right after installing:
+
+```bash
+python scripts/make_demo_audio.py demo
+python -m nmf_cli build-dict --audio-dir demo/single_notes --pitch-range 21 108 --output dictionaries/piano.npy
+python -m nmf_cli transcribe --input demo/piece.wav --dict dictionaries/piano.npy --method compare --out-dir outputs/demo
+```
+
+`demo/piece_reference.mid` holds the notes that were actually played, to
+compare against `outputs/demo/piece_standard.mid` and
+`outputs/demo/piece_group_sparse.mid`.
+
+For real results use real single-note piano recordings, e.g. the `ISOL/NO`
+folders of the MAPS piano dataset, which is distributed for research use.
+
 ### Build a dictionary
 
 From isolated single-note recordings (supervised, recommended). The pitch is

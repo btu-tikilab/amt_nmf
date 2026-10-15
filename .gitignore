@@ -10,3 +10,5 @@ dist/
 outputs/
 *.npy
 !tests/**/*.npy
+demo/
+dictionaries/
