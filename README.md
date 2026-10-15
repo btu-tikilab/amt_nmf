@@ -101,6 +101,12 @@ are also available. `λ` is `--sparsity-weight`; λ = 0 gives back standard NMF.
    (50 ms) are dropped.
 4. Frame f becomes time `f × hop_length / sample_rate` seconds; velocity
    follows the peak height.
+5. **Group-sparse only:** the penalty also shrinks each note's quiet decaying
+   tail to zero, which would end notes too early. So group-sparse decides
+   which notes exist and when they start, and each Note-Off is then taken from
+   an unpenalised re-fit of H restricted to the pitches it selected (a
+   "relaxed" or debiased estimate). `summary.json` reports this re-fit under
+   `offset_refit`.
 
 ## 3. Usage
 

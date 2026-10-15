@@ -111,3 +111,23 @@ def test_single_method_writes_only_its_files(tmp_path, piece_wav, built_dict):
     transcribe(piece_wav, built_dict, tmp_path, method="group-sparse")
     assert (tmp_path / "piece_group_sparse.mid").exists()
     assert not (tmp_path / "piece_standard.mid").exists()
+
+
+@pytest.mark.parametrize("key", ["standard", "group_sparse"])
+def test_note_offsets_match_reference(tmp_path, piece_wav, built_dict, key):
+    """Every note must start within 50 ms and end within max(50 ms, 20% of
+    its duration) of the reference (the mir_eval note-with-offset rule).
+    Guards against group sparsity shrinking note tails to zero."""
+    s = transcribe(piece_wav, built_dict, tmp_path, method="compare")
+    est = pretty_midi.PrettyMIDI(s["results"][key]["midi"]).instruments[0].notes
+    matched = 0
+    for pitch, start, dur in PIECE:
+        for n in est:
+            if n.pitch == pitch and abs(n.start - start) <= 0.05:
+                if abs(n.end - (start + dur)) <= max(0.05, 0.2 * dur):
+                    matched += 1
+                break
+    assert matched == len(PIECE), f"{matched}/{len(PIECE)} notes with good offsets"
+    if key == "group_sparse":
+        refit = s["results"][key]["offset_refit"]
+        assert refit["n_pitches"] >= 1 and refit["iterations"] >= 1

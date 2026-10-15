@@ -11,7 +11,9 @@
      * the Note-Off comes when the activation falls below
        ``threshold * offset_ratio``, or at the next Note-On of that pitch.
    Frames become seconds with t = frame * hop_length / sample_rate.
-3. ``write_midi`` writes the notes with pretty_midi.
+3. ``refine_offsets`` optionally re-decides Note-Offs from a second roll
+   (used for group-sparse NMF, see ``pipeline``).
+4. ``write_midi`` writes the notes with pretty_midi.
 """
 
 from __future__ import annotations
@@ -102,6 +104,61 @@ def roll_to_notes(
                 notes.append(_note(pitch, on, off, row[p], frame_s))
     notes = [n for n in notes if n.end - n.start >= min_duration]
     return sorted(notes, key=lambda n: (n.start, n.pitch))
+
+
+def refine_offsets(
+    notes: list[NoteEvent],
+    roll: np.ndarray,
+    pitches: list[int],
+    sr: int,
+    hop_length: int,
+    off_level: float = 0.05,
+    peak_window: int = 10,
+) -> list[NoteEvent]:
+    """Re-decide each note's Note-Off from a second activation roll.
+
+    Pitch and onset of every note are kept; only the end changes. For each
+    note the peak of ``roll`` within ``peak_window`` frames after the onset is
+    found, and the note ends at the first later frame where the roll (scaled
+    by its global maximum) drops below ``off_level``, or at the next onset of
+    the same pitch. Used to undo the tail shrinkage of group-sparse NMF.
+    """
+    roll = np.asarray(roll, dtype=np.float64)
+    if roll.ndim != 2 or roll.shape[0] != len(pitches):
+        raise ParameterError(
+            f"roll shape {roll.shape} does not match {len(pitches)} pitches."
+        )
+    peak = roll.max() if roll.size else 0.0
+    if not notes or not np.isfinite(peak) or peak <= 0:
+        return list(notes)
+    roll = roll / peak
+    T = roll.shape[1]
+    frame_s = hop_length / sr
+    row_of = {p: i for i, p in enumerate(pitches)}
+    starts: dict[int, list[int]] = {}
+    for n in notes:
+        starts.setdefault(n.pitch, []).append(int(round(n.start / frame_s)))
+
+    refined = []
+    for n in notes:
+        if n.pitch not in row_of:
+            refined.append(n)
+            continue
+        row = roll[row_of[n.pitch]]
+        on = int(round(n.start / frame_s))
+        later = [s for s in starts[n.pitch] if s > on]
+        limit = min(later) if later else T
+        if on >= limit:
+            refined.append(n)
+            continue
+        p = on + int(np.argmax(row[on : min(on + peak_window, limit)]))
+        below = np.nonzero(row[p:limit] < off_level)[0]
+        off = p + below[0] if below.size else limit
+        if off > on:
+            refined.append(NoteEvent(n.pitch, n.start, off * frame_s, n.velocity))
+        else:
+            refined.append(n)
+    return sorted(refined, key=lambda n: (n.start, n.pitch))
 
 
 def _note(pitch: int, on: int, off: int, peak: float, frame_s: float) -> NoteEvent:

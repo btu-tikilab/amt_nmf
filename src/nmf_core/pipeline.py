@@ -15,7 +15,13 @@ from . import __version__
 from .audio import load_spectrogram, validate_dimensions
 from .dictionary import Dictionary, load_dictionary
 from .errors import ParameterError
-from .midi import pitch_activations, roll_to_notes, save_activations, write_midi
+from .midi import (
+    pitch_activations,
+    refine_offsets,
+    roll_to_notes,
+    save_activations,
+    write_midi,
+)
 from .nmf import NMFResult, group_sparse_nmf, hoyer_sparsity, standard_nmf
 
 METHODS = ("standard", "group-sparse", "compare")
@@ -113,7 +119,16 @@ def transcribe(
                 tol=tol,
             )
         results[name] = _write_outputs(
-            res, V, d, out_dir, f"{stem}_{_SUFFIX[name]}", threshold, min_duration
+            res,
+            V,
+            d,
+            out_dir,
+            f"{stem}_{_SUFFIX[name]}",
+            threshold,
+            min_duration,
+            refit_offsets=name == "group-sparse",
+            max_iter=max_iter,
+            tol=tol,
         )
         r = results[name]
         log(
@@ -167,6 +182,9 @@ def _write_outputs(
     name: str,
     threshold: float,
     min_duration: float,
+    refit_offsets: bool = False,
+    max_iter: int = 500,
+    tol: float = 1e-4,
 ) -> dict:
     cfg = d.config
     roll = pitch_activations(res.H, d.groups)
@@ -178,6 +196,34 @@ def _write_outputs(
         threshold=threshold,
         min_duration=min_duration,
     )
+    refit_info = None
+    if refit_offsets and notes:
+        # The l1,2 penalty also shrinks each note's quiet decaying tail to
+        # zero, so notes would end too early. Keep the group-sparse decision
+        # of which notes exist and when they start, but take each Note-Off
+        # from an unpenalised re-fit restricted to the selected pitches
+        # (a "relaxed" / debiased estimate).
+        keep = sorted({n.pitch for n in notes})
+        entries = [p for p in d.pitch_map if int(p["midi"]) in keep]
+        cols = [c for p in entries for c in p["columns"]]
+        groups = [[cols.index(c) for c in p["columns"]] for p in entries]
+        refit = standard_nmf(V, d.W[:, cols], max_iter=max_iter, tol=tol)
+        notes = refine_offsets(
+            notes,
+            pitch_activations(refit.H, groups),
+            [int(p["midi"]) for p in entries],
+            cfg.sr,
+            cfg.hop_length,
+            off_level=threshold * 0.5,
+        )
+        refit_info = {
+            "description": "note offsets from an unpenalised refit on the "
+            "selected pitches",
+            "n_pitches": len(keep),
+            "iterations": refit.n_iter,
+            "converged": refit.converged,
+            "solve_time_s": round(refit.elapsed_s, 3),
+        }
     midi_path = write_midi(notes, out_dir / f"{name}.mid")
     npz_path = save_activations(
         out_dir / f"{name}_H.npz",
@@ -205,6 +251,7 @@ def _write_outputs(
             float((roll / max(roll.max(), 1e-12) >= threshold).sum(axis=0).mean()), 4
         ),
         "solver": res.params,
+        **({"offset_refit": refit_info} if refit_info else {}),
     }
 
 

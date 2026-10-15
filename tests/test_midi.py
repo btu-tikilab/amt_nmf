@@ -124,3 +124,20 @@ def test_npz_contents(tmp_path, roll):
     assert list(z["atom_pitch"]) == [60, 60, 64, 64, 67, 67, 72, 72]
     assert z["times"][1] == pytest.approx(FRAME)
     assert len(json.loads(str(z["notes"]))) == len(notes)
+
+
+def test_refine_offsets_keeps_onsets_and_extends_tails():
+    from nmf_core.midi import NoteEvent, refine_offsets
+
+    T = 100
+    # The detection roll ended the note early (frame 30); the refit roll
+    # still shows the decaying tail until frame 60.
+    notes = [NoteEvent(60, 10 * FRAME, 30 * FRAME, 90)]
+    refit = _bump(T, 10, 60, decay=0.03)[None]
+    (n,) = refine_offsets(notes, refit, [60], SR, HOP, off_level=0.05)
+    assert n.start == notes[0].start and n.pitch == 60 and n.velocity == 90
+    assert round(n.end / FRAME) == 60
+    # A following onset of the same pitch still caps the note.
+    two = [*notes, NoteEvent(60, 40 * FRAME, 50 * FRAME, 90)]
+    first = refine_offsets(two, refit, [60], SR, HOP)[0]
+    assert round(first.end / FRAME) == 40
