@@ -19,6 +19,9 @@ src/
     pipeline.py         transcribe(): validation, both solvers, summary.json
     errors.py           user-facing exception types
   nmf_cli/              argparse command line (python -m nmf_cli)
+scripts/
+  make_demo_audio.py    synthetic single notes + test piece (no dataset needed)
+  evaluate_midi.py      note-level P/R/F1 against a reference MIDI (mir_eval)
 tests/                  pytest suite (synthetic audio, no dataset needed)
 ```
 
@@ -211,6 +214,42 @@ settings, dictionary shape and pitch range), input duration, and per method:
 mode a `comparison` block puts these side by side and lists pitches found by
 only one method. `processing_time_s` is the total wall-clock time.
 
+How to read these numbers:
+
+* `relative_reconstruction_error` is ‖V − WH‖ / ‖V‖ of the solver's own fit.
+  For group-sparse that is the **penalised** fit, so it is expected to be
+  higher than standard NMF's: the penalty deliberately gives up some
+  reconstruction to switch off unneeded pitches. The unpenalised re-fit used
+  for note endings reports its own error under `offset_refit`.
+* `pitch_roll_hoyer_sparsity` and `mean_active_pitches_per_frame` describe
+  the activations, not transcription accuracy. To measure accuracy, compare
+  the MIDI files against a reference (next section).
+
+## 5. Evaluating against a reference
+
+`scripts/evaluate_midi.py` computes note-level precision, recall and F1 with
+mir_eval (installed by `pip install -e ".[dev]"`), using the standard MIREX
+rules:
+
+* **onset-only:** same pitch, and the onset within 50 ms;
+* **onset + offset:** additionally, the offset within 50 ms or 20% of the
+  reference note's duration, whichever is larger.
+
+```bash
+python scripts/evaluate_midi.py demo/piece_reference.mid outputs/demo/piece_standard.mid outputs/demo/piece_group_sparse.mid
+```
+
+```
+file                             notes   onset P / R / F1     onset+offset P / R / F1
+-------------------------------------------------------------------------------------
+piece_standard.mid                  13   0.92 / 1.00 / 0.96   0.92 / 1.00 / 0.96
+piece_group_sparse.mid              12   1.00 / 1.00 / 1.00   1.00 / 1.00 / 1.00
+```
+
+Change the tolerances with `--onset-tolerance`, `--offset-ratio` and
+`--offset-min`, and add `--json scores.json` to save the numbers. For MAPS,
+use the `.mid` file that comes with each recording as the reference.
+
 Load activations in Python:
 
 ```python
@@ -220,7 +259,7 @@ z = np.load("outputs/piece/piece_group_sparse_H.npz")
 roll, times, pitches = z["pitch_roll"], z["times"], z["pitches"]
 ```
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 Errors are printed as one `Error: ...` line and the command exits with
 status 1; nothing is written to `--out-dir` for a failed run.

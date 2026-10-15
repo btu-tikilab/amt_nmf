@@ -223,6 +223,9 @@ def _write_outputs(
             "iterations": refit.n_iter,
             "converged": refit.converged,
             "solve_time_s": round(refit.elapsed_s, 3),
+            # The top-level relative_reconstruction_error is the penalised
+            # group-sparse fit; this one is the unpenalised refit.
+            "relative_reconstruction_error": round(refit.reconstruction_error(V), 6),
         }
     midi_path = write_midi(notes, out_dir / f"{name}.mid")
     npz_path = save_activations(
