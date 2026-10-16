@@ -14,13 +14,15 @@ dependencies = [
     "librosa>=0.10",
     "soundfile>=0.12",
     "pretty_midi>=0.2.10",
+    "mir_eval>=0.7",     # evaluate
+    "matplotlib>=3.7",   # report
+    "music21>=9.1",      # sheet
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
-    "mir_eval>=0.7",  # only for scripts/evaluate_midi.py
 ]
 
 [project.scripts]

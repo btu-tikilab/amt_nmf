@@ -1,7 +1,7 @@
 {
   "tool": "nmf-transcriber",
   "version": "1.0.0",
-  "created_utc": "2026-10-16T06:27:17+00:00",
+  "created_utc": "2026-10-16T09:31:16+00:00",
   "python": "3.13.16",
   "config": {
     "input": "demo/varied.wav",
@@ -44,7 +44,7 @@
       "converged": true,
       "iterations": 520,
       "max_iterations": 1000,
-      "solve_time_s": 1.996,
+      "solve_time_s": 1.688,
       "final_cost": 4.168728438372255,
       "relative_reconstruction_error": 0.087347,
       "n_notes": 167,
@@ -117,7 +117,7 @@
       "converged": true,
       "iterations": 70,
       "max_iterations": 1010,
-      "solve_time_s": 0.436,
+      "solve_time_s": 0.414,
       "final_cost": 225.5243862884509,
       "relative_reconstruction_error": 0.330079,
       "n_notes": 144,
@@ -190,7 +190,7 @@
         "n_pitches": 52,
         "iterations": 480,
         "converged": true,
-        "solve_time_s": 0.806,
+        "solve_time_s": 0.829,
         "relative_reconstruction_error": 0.092214
       }
     }
@@ -217,5 +217,5 @@
     ],
     "pitches_only_in_group_sparse": []
   },
-  "processing_time_s": 4.217
+  "processing_time_s": 3.729
 }

@@ -187,6 +187,7 @@ def save_activations(
     sr: int,
     hop_length: int,
     notes: list[NoteEvent],
+    cost_history: list[float] | None = None,
 ) -> Path:
     """Save H, the pitch roll and everything needed to interpret them."""
     path = Path(path)
@@ -204,5 +205,6 @@ def save_activations(
         sr=sr,
         hop_length=hop_length,
         notes=json.dumps([asdict(n) for n in notes]),
+        cost_history=np.asarray(cost_history or [], dtype=np.float64),
     )
     return path

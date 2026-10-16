@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,12 +50,20 @@ def render(events, total: float, sr: int = SR) -> np.ndarray:
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess:
-    """Run ``python -m nmf_cli ...`` exactly as a user would in a terminal."""
+    """Run ``python -m nmf_cli ...`` exactly as a user would in a terminal.
+
+    The child's stdout/stderr use cp1252, the encoding a Windows console has
+    when output is piped, so a character it cannot encode fails here too.
+    """
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
     return subprocess.run(
         [sys.executable, "-m", "nmf_cli", *map(str, args)],
         capture_output=True,
         text=True,
+        encoding="cp1252",
+        errors="replace",
         timeout=600,
+        env=env,
     )
 
 

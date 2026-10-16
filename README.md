@@ -17,25 +17,31 @@ src/
     dictionary.py       build / save / load the dictionary W (+ JSON sidecar)
     midi.py             activations H -> note events -> .mid, .npz dumps
     pipeline.py         transcribe(): validation, both solvers, summary.json
+    evaluate.py         note- and frame-level scores against a reference (mir_eval)
     errors.py           user-facing exception types
   nmf_cli/              argparse command line (python -m nmf_cli)
+    cli.py              build-dict, transcribe, evaluate, report, sheet
+    report.py           self-contained HTML comparison report (matplotlib)
+    sheet.py            MIDI -> MusicXML (music21), PDF through MuseScore
 scripts/
   make_demo_audio.py    synthetic single notes + two test pieces (no dataset needed)
-  evaluate_midi.py      note-level P/R/F1 against a reference MIDI (mir_eval)
+  evaluate_midi.py      shortcut for `python -m nmf_cli evaluate`
 tests/                  pytest suite (synthetic audio, no dataset needed)
 examples/               outputs and scores of the two demo inputs
 ```
 
 ## 1. Setup
 
-Python 3.10 or newer.
+Python 3.10 or newer (tested on 3.10, 3.13 and 3.14).
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"            # package + pytest + ruff
 # runtime only, without the test tools:  pip install -e .
 ```
+
+On Windows, if `py` is not recognised, use `python` instead.
 
 Check the install:
 
@@ -216,7 +222,7 @@ For `--input piece.wav --method compare` the output directory contains:
 |---|---|
 | `piece_standard.mid` | standard NMF transcription, one piano track |
 | `piece_group_sparse.mid` | group-sparse NMF transcription |
-| `piece_standard_H.npz`, `piece_group_sparse_H.npz` | `H` (atoms x frames), `pitch_roll` (pitches x frames), `pitches`, `atom_pitch`, `times` (s), `sr`, `hop_length`, `notes` (JSON list) |
+| `piece_standard_H.npz`, `piece_group_sparse_H.npz` | `H` (atoms x frames), `pitch_roll` (pitches x frames), `pitches`, `atom_pitch`, `times` (s), `sr`, `hop_length`, `notes` (JSON list), `cost_history` |
 | `summary.json` | execution log, below |
 
 `summary.json` records the full run configuration (all flags, spectrogram
@@ -238,30 +244,53 @@ How to read these numbers:
   the activations, not transcription accuracy. To measure accuracy, compare
   the MIDI files against a reference (next section).
 
-## 5. Evaluating against a reference
+## 5. Evaluating, report and sheet music
 
-`scripts/evaluate_midi.py` computes note-level precision, recall and F1 with
-mir_eval (installed by `pip install -e ".[dev]"`), using the standard MIREX
-rules:
+### Scores against a reference
+
+`evaluate` computes note-level precision, recall and F1 with mir_eval, using
+the standard MIREX rules, plus frame-level F1 on 10 ms piano rolls:
 
 * **onset-only:** same pitch, and the onset within 50 ms;
 * **onset + offset:** additionally, the offset within 50 ms or 20% of the
   reference note's duration, whichever is larger.
 
 ```bash
-python scripts/evaluate_midi.py demo/piece_reference.mid outputs/demo/piece_standard.mid outputs/demo/piece_group_sparse.mid
+python -m nmf_cli evaluate --reference demo/piece_reference.mid --predicted outputs/demo/piece_group_sparse.mid --compare-std outputs/demo/piece_standard.mid --out-json outputs/demo/eval.json
 ```
 
 ```
-file                             notes   onset P / R / F1     onset+offset P / R / F1
--------------------------------------------------------------------------------------
-piece_standard.mid                  13   0.92 / 1.00 / 0.96   0.92 / 1.00 / 0.96
-piece_group_sparse.mid              12   1.00 / 1.00 / 1.00   1.00 / 1.00 / 1.00
+file                             notes   onset P / R / F1     onset+offset P / R / F1   frame F1
+------------------------------------------------------------------------------------------------
+piece_standard.mid                  13   0.92 / 1.00 / 0.96   0.92 / 1.00 / 0.96        0.98
+piece_group_sparse.mid              12   1.00 / 1.00 / 1.00   1.00 / 1.00 / 1.00        0.98
 ```
 
-Change the tolerances with `--onset-tolerance`, `--offset-ratio` and
-`--offset-min`, and add `--json scores.json` to save the numbers. For MAPS,
-use the `.mid` file that comes with each recording as the reference.
+`--predicted` takes one or more files. Change the tolerances with
+`--onset-tolerance`, `--offset-ratio` and `--offset-min`. For MAPS, use the
+`.mid` file that comes with each recording as the reference.
+`python scripts/evaluate_midi.py REFERENCE.mid PREDICTED.mid ... [--json F]`
+does the same.
+
+### HTML report
+
+```bash
+python -m nmf_cli report --std-mid outputs/demo/piece_standard.mid --gs-mid outputs/demo/piece_group_sparse.mid --summary outputs/demo/summary.json --eval-json outputs/demo/eval.json --reference demo/piece_reference.mid --out outputs/demo/report.html
+```
+
+One `.html` file that opens offline: piano rolls of the reference (if given)
+and both methods, the scores (if `--eval-json` is given), the solver figures
+from `summary.json`, and both convergence curves.
+
+### Sheet music
+
+```bash
+python -m nmf_cli sheet --input outputs/demo/piece_group_sparse.mid --out outputs/demo/score.xml
+```
+
+Quantises the notes to 16ths and writes MusicXML, which MuseScore, Sibelius,
+Finale and flat.io open. `--pdf` also renders `score.pdf` if MuseScore is
+installed and on the PATH; otherwise it says so and keeps the `.xml`.
 
 Load activations in Python:
 
@@ -304,6 +333,7 @@ status 1; nothing is written to `--out-dir` for a failed run.
 | `Audio file not found` / `Cannot read audio file` | Check the path. A decoding failure means the file is damaged or in an unsupported codec; convert it to 16-bit WAV. |
 | `None of the ... audio files ... is named with a MIDI pitch` | `build-dict` could not find pitches in the file names; rename them like `note_60.wav` or use MAPS names. |
 | `--threshold must be in (0, 1]`, `--sparsity-weight must be >= 0` | Hyperparameter out of range. |
+| `UnicodeEncodeError: 'charmap' codec can't encode` | Fixed: the CLI replaces characters the Windows console cannot show instead of crashing. If you see it, you are running an older copy. |
 | `ModuleNotFoundError: No module named 'nmf_core'` or `'librosa'` | The package is not installed in the active environment: activate the venv and run `pip install -e ".[dev]"`. |
 | `sndfile library not found` / `OSError: cannot load library 'libsndfile'` | On Linux install it with `sudo apt-get install libsndfile1`; the pip wheels bundle it on Windows and macOS. |
 | `.mp3` cannot be read | MP3 decoding needs ffmpeg on the system; convert to WAV/FLAC instead. |

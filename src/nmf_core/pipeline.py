@@ -237,6 +237,7 @@ def _write_outputs(
         cfg.sr,
         cfg.hop_length,
         notes,
+        res.cost_history,
     )
     return {
         "midi": str(midi_path),

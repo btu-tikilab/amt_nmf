@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import sys
 import traceback
 from pathlib import Path
@@ -164,6 +166,82 @@ def _parser() -> argparse.ArgumentParser:
         default=0.05,
         help="drop notes shorter than this, in seconds (default: 0.05)",
     )
+
+    e = sub.add_parser(
+        "evaluate",
+        help="score transcribed MIDI against a reference MIDI",
+        description="Note-level precision / recall / F1 (onset, and onset + "
+        "offset) and frame-level F1 of transcribed MIDI against a reference.",
+    )
+    e.add_argument(
+        "--reference", type=Path, required=True, help="reference (ground-truth) .mid"
+    )
+    e.add_argument(
+        "--predicted",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="transcribed .mid file(s)",
+    )
+    e.add_argument(
+        "--compare-std",
+        type=Path,
+        help="a standard-NMF .mid to score alongside --predicted",
+    )
+    e.add_argument(
+        "--out-json", type=Path, help="also write the scores to this .json file"
+    )
+    e.add_argument(
+        "--onset-tolerance",
+        type=float,
+        default=0.05,
+        help="onset tolerance in seconds (default: 0.05)",
+    )
+    e.add_argument(
+        "--offset-ratio",
+        type=float,
+        default=0.2,
+        help="offset tolerance as a fraction of the reference note length "
+        "(default: 0.2)",
+    )
+    e.add_argument(
+        "--offset-min",
+        type=float,
+        default=0.05,
+        help="minimum offset tolerance in seconds (default: 0.05)",
+    )
+
+    r = sub.add_parser(
+        "report",
+        help="write an HTML report comparing both methods",
+        description="Self-contained HTML report: piano rolls, solver runs, "
+        "convergence and (optionally) scores against a reference.",
+    )
+    r.add_argument("--std-mid", type=Path, required=True, help="standard NMF .mid")
+    r.add_argument("--gs-mid", type=Path, required=True, help="group-sparse NMF .mid")
+    r.add_argument(
+        "--summary", type=Path, required=True, help="summary.json from transcribe"
+    )
+    r.add_argument("--eval-json", type=Path, help="scores written by evaluate")
+    r.add_argument(
+        "--reference", type=Path, help="reference .mid, drawn as a third piano roll"
+    )
+    r.add_argument(
+        "--out", type=Path, default=Path("outputs/report.html"), help="output .html"
+    )
+
+    s = sub.add_parser(
+        "sheet",
+        help="convert MIDI to sheet music (MusicXML, optional PDF)",
+        description="Quantise a MIDI file to 16th notes and write MusicXML. "
+        "--pdf also renders a PDF if MuseScore is installed.",
+    )
+    s.add_argument("--input", type=Path, required=True, help="input .mid")
+    s.add_argument("--out", type=Path, required=True, help="output .xml (MusicXML)")
+    s.add_argument("--title", default="NMF transcription", help="score title")
+    s.add_argument(
+        "--pdf", action="store_true", help="also write a PDF next to the .xml"
+    )
     return p
 
 
@@ -230,13 +308,99 @@ def _transcribe(a: argparse.Namespace) -> None:
     )
 
 
+def _evaluate(a: argparse.Namespace) -> None:
+    from nmf_core.evaluate import score
+
+    predicted = ([a.compare_std] if a.compare_std else []) + list(a.predicted)
+    results = [
+        score(a.reference, p, a.onset_tolerance, a.offset_ratio, a.offset_min)
+        for p in predicted
+    ]
+    _log(f"Reference: {a.reference} ({results[0]['n_reference']} notes)")
+    _log(
+        f"Onset tolerance {a.onset_tolerance * 1000:.0f} ms; offset tolerance "
+        f"max({a.offset_min * 1000:.0f} ms, {a.offset_ratio:.0%} of duration)\n"
+    )
+
+    def fmt(m: dict) -> str:
+        return f"{m['precision']:.2f} / {m['recall']:.2f} / {m['f1']:.2f}"
+
+    head = (
+        f"{'file':<32} {'notes':>5}   {'onset P / R / F1':<18}   "
+        f"{'onset+offset P / R / F1':<23}   frame F1"
+    )
+    _log(head)
+    _log("-" * len(head))
+    for r in results:
+        _log(
+            f"{Path(r['file']).name:<32} {r['n_predicted']:>5}   "
+            f"{fmt(r['onset']):<18}   {fmt(r['onset_offset']):<23}   "
+            f"{r['frame']['f1']:.2f}"
+        )
+    if a.out_json:
+        settings = {
+            "onset_tolerance": a.onset_tolerance,
+            "offset_ratio": a.offset_ratio,
+            "offset_min": a.offset_min,
+        }
+        a.out_json.parent.mkdir(parents=True, exist_ok=True)
+        a.out_json.write_text(
+            json.dumps(
+                {"reference": str(a.reference), "settings": settings,
+                 "results": results},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )  # fmt: skip
+        _log(f"\nScores written to {a.out_json}")
+
+
+def _report(a: argparse.Namespace) -> None:
+    from nmf_cli.report import generate_report
+
+    out = generate_report(
+        a.out, a.std_mid, a.gs_mid, a.summary, a.eval_json, a.reference
+    )
+    _log(f"Report written to {out}")
+
+
+def _sheet(a: argparse.Namespace) -> None:
+    from nmf_cli.sheet import midi_to_musicxml, musicxml_to_pdf
+
+    xml = midi_to_musicxml(a.input, a.out, a.title)
+    _log(f"MusicXML written to {xml}")
+    if a.pdf:
+        pdf = musicxml_to_pdf(xml, xml.with_suffix(".pdf"))
+        if pdf is None:
+            _log(
+                "MuseScore was not found, so no PDF was made. Open the .xml in "
+                "MuseScore and use File > Export > PDF."
+            )
+        else:
+            _log(f"PDF written to {pdf}")
+
+
+_COMMANDS = {
+    "build-dict": _build_dict,
+    "transcribe": _transcribe,
+    "evaluate": _evaluate,
+    "report": _report,
+    "sheet": _sheet,
+}
+
+
+def _safe_console() -> None:
+    """Never crash on a character the console cannot encode (Windows cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _safe_console()
     args = _parser().parse_args(argv)
     try:
-        if args.command == "build-dict":
-            _build_dict(args)
-        else:
-            _transcribe(args)
+        _COMMANDS[args.command](args)
     except TranscriberError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
