@@ -149,8 +149,8 @@ def _parser() -> argparse.ArgumentParser:
     t.add_argument(
         "--max-iter",
         type=int,
-        default=500,
-        help="maximum NMF iterations (default: 500)",
+        default=1000,
+        help="maximum NMF iterations (default: 1000)",
     )
     t.add_argument(
         "--tol",

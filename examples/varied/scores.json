@@ -1,0 +1,40 @@
+{
+  "reference": "examples/varied/varied_reference.mid",
+  "settings": {
+    "onset_tolerance": 0.05,
+    "offset_ratio": 0.2,
+    "offset_min": 0.05
+  },
+  "results": [
+    {
+      "file": "examples/varied/varied_standard.mid",
+      "n_reference": 148,
+      "n_predicted": 167,
+      "onset": {
+        "precision": 0.844311377245509,
+        "recall": 0.9527027027027027,
+        "f1": 0.8952380952380953
+      },
+      "onset_offset": {
+        "precision": 0.718562874251497,
+        "recall": 0.8108108108108109,
+        "f1": 0.761904761904762
+      }
+    },
+    {
+      "file": "examples/varied/varied_group_sparse.mid",
+      "n_reference": 148,
+      "n_predicted": 144,
+      "onset": {
+        "precision": 0.9791666666666666,
+        "recall": 0.9527027027027027,
+        "f1": 0.9657534246575342
+      },
+      "onset_offset": {
+        "precision": 0.8333333333333334,
+        "recall": 0.8108108108108109,
+        "f1": 0.8219178082191781
+      }
+    }
+  ]
+}

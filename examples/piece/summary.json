@@ -1,0 +1,137 @@
+{
+  "tool": "nmf-transcriber",
+  "version": "1.0.0",
+  "created_utc": "2026-10-16T06:27:10+00:00",
+  "python": "3.13.16",
+  "config": {
+    "input": "demo/piece.wav",
+    "dictionary": "dictionaries/piano.npy",
+    "out_dir": "examples/piece",
+    "method": "compare",
+    "sparsity_weight": 0.2,
+    "threshold": 0.1,
+    "beta": 2.0,
+    "max_iter": 1000,
+    "tol": 0.0001,
+    "min_duration_s": 0.05,
+    "spectrogram": {
+      "sr": 22050,
+      "hop_length": 512,
+      "fmin": 27.5,
+      "bins_per_octave": 36,
+      "n_bins": 288,
+      "type": "cqt",
+      "bin_resolution_semitones": 0.3333333333333333
+    },
+    "dictionary_shape": [
+      288,
+      176
+    ],
+    "pitch_range": [
+      21,
+      108
+    ]
+  },
+  "input": {
+    "duration_s": 4.017,
+    "n_frames": 173,
+    "peak_magnitude": 8.509437561035156
+  },
+  "results": {
+    "standard": {
+      "midi": "examples/piece/piece_standard.mid",
+      "activations": "examples/piece/piece_standard_H.npz",
+      "converged": true,
+      "iterations": 550,
+      "max_iterations": 1000,
+      "solve_time_s": 0.297,
+      "final_cost": 0.397778097697668,
+      "relative_reconstruction_error": 0.073009,
+      "n_notes": 13,
+      "pitches_detected": [
+        47,
+        48,
+        55,
+        60,
+        62,
+        64,
+        65,
+        67,
+        69,
+        72,
+        76
+      ],
+      "pitch_roll_hoyer_sparsity": 0.8991,
+      "mean_active_pitches_per_frame": 2.1329,
+      "solver": {
+        "cost": "euclidean",
+        "tol": 0.0001,
+        "learn_W": false
+      }
+    },
+    "group_sparse": {
+      "midi": "examples/piece/piece_group_sparse.mid",
+      "activations": "examples/piece/piece_group_sparse_H.npz",
+      "converged": true,
+      "iterations": 60,
+      "max_iterations": 1010,
+      "solve_time_s": 0.057,
+      "final_cost": 29.195263595503945,
+      "relative_reconstruction_error": 0.301288,
+      "n_notes": 12,
+      "pitches_detected": [
+        48,
+        55,
+        60,
+        62,
+        64,
+        65,
+        67,
+        69,
+        72,
+        76
+      ],
+      "pitch_roll_hoyer_sparsity": 0.9363,
+      "mean_active_pitches_per_frame": 1.763,
+      "solver": {
+        "cost": "beta-divergence (beta=2.0) + l1,2 group penalty",
+        "beta": 2.0,
+        "sparsity_weight": 0.2,
+        "warm_start_iter": 10,
+        "tol": 0.0001,
+        "n_groups": 88
+      },
+      "offset_refit": {
+        "description": "note offsets from an unpenalised refit on the selected pitches",
+        "n_pitches": 10,
+        "iterations": 300,
+        "converged": true,
+        "solve_time_s": 0.018,
+        "relative_reconstruction_error": 0.083456
+      }
+    }
+  },
+  "comparison": {
+    "n_notes": {
+      "standard": 13,
+      "group_sparse": 12
+    },
+    "pitch_roll_hoyer_sparsity": {
+      "standard": 0.8991,
+      "group_sparse": 0.9363
+    },
+    "mean_active_pitches_per_frame": {
+      "standard": 2.1329,
+      "group_sparse": 1.763
+    },
+    "relative_reconstruction_error": {
+      "standard": 0.073009,
+      "group_sparse": 0.301288
+    },
+    "pitches_only_in_standard": [
+      47
+    ],
+    "pitches_only_in_group_sparse": []
+  },
+  "processing_time_s": 0.978
+}

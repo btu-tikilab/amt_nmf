@@ -1,0 +1,40 @@
+{
+  "reference": "examples/piece/piece_reference.mid",
+  "settings": {
+    "onset_tolerance": 0.05,
+    "offset_ratio": 0.2,
+    "offset_min": 0.05
+  },
+  "results": [
+    {
+      "file": "examples/piece/piece_standard.mid",
+      "n_reference": 12,
+      "n_predicted": 13,
+      "onset": {
+        "precision": 0.9230769230769231,
+        "recall": 1.0,
+        "f1": 0.9600000000000001
+      },
+      "onset_offset": {
+        "precision": 0.9230769230769231,
+        "recall": 1.0,
+        "f1": 0.9600000000000001
+      }
+    },
+    {
+      "file": "examples/piece/piece_group_sparse.mid",
+      "n_reference": 12,
+      "n_predicted": 12,
+      "onset": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "onset_offset": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  ]
+}

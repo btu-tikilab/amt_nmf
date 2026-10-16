@@ -20,9 +20,10 @@ src/
     errors.py           user-facing exception types
   nmf_cli/              argparse command line (python -m nmf_cli)
 scripts/
-  make_demo_audio.py    synthetic single notes + test piece (no dataset needed)
+  make_demo_audio.py    synthetic single notes + two test pieces (no dataset needed)
   evaluate_midi.py      note-level P/R/F1 against a reference MIDI (mir_eval)
 tests/                  pytest suite (synthetic audio, no dataset needed)
+examples/               outputs and scores of the two demo inputs
 ```
 
 ## 1. Setup
@@ -129,6 +130,18 @@ python -m nmf_cli transcribe --input demo/piece.wav --dict dictionaries/piano.np
 compare against `outputs/demo/piece_standard.mid` and
 `outputs/demo/piece_group_sparse.mid`.
 
+The script also writes a harder second input, `demo/varied.wav` (30 s of
+random 1 to 4 note chords over MIDI 36 to 88) with `demo/varied_reference.mid`.
+It is played with a brighter, more inharmonic tone than the single notes, so
+the dictionary does not match it exactly:
+
+```bash
+python -m nmf_cli transcribe --input demo/varied.wav --dict dictionaries/piano.npy --method compare --out-dir outputs/varied
+```
+
+Results of both demo inputs, with their scores, are kept in
+[`examples/`](examples/README.md).
+
 For real results use real single-note piano recordings, e.g. the `ISOL/NO`
 folders of the MAPS piano dataset, which is distributed for research use.
 
@@ -183,7 +196,7 @@ python -m nmf_cli transcribe \
 | `--threshold` | Note-On threshold relative to the loudest activation, in (0, 1] | `0.1` |
 | `--out-dir` | where MIDI, `.npz` and `summary.json` go | `outputs` |
 | `--beta` | β-divergence of the group-sparse cost, in [0, 2] | `2` |
-| `--max-iter`, `--tol` | iteration cap and convergence tolerance | `500`, `1e-4` |
+| `--max-iter`, `--tol` | iteration cap and convergence tolerance | `1000`, `1e-4` |
 | `--min-duration` | shortest note kept, seconds | `0.05` |
 
 The spectrogram settings always come from the dictionary sidecar, so the input
@@ -259,7 +272,26 @@ z = np.load("outputs/piece/piece_group_sparse_H.npz")
 roll, times, pitches = z["pitch_roll"], z["times"], z["pitches"]
 ```
 
-## 6. Troubleshooting
+## 6. Known limitations
+
+* **Synthetic validation only.** The tests and examples use synthesized piano
+  tones. Accuracy on real recordings (e.g. MAPS) has not been measured here
+  and will be lower; `--threshold` and `--sparsity-weight` may need tuning.
+* **Fixed dictionary.** W is learned once from single notes and not adapted
+  to the recording, so a different piano or room lowers accuracy.
+* **Note endings in group-sparse** come from an unpenalised re-fit (see
+  "From H to MIDI"), because the penalty itself shortens decaying notes.
+* **Sustain pedal and very soft notes.** Notes are cut when their activation
+  falls below `threshold / 2` of the loudest note, so pedalled notes may end
+  early and notes far quieter than the loudest one may be missed.
+* **Convergence.** Iterations stop when the cost improves by less than
+  `--tol` (1e-4) over 10 iterations, or at `--max-iter` (1000). On the demo
+  inputs standard NMF needs 520 to 550 iterations and group-sparse 60 to 70.
+  `summary.json` reports `converged: false` if the cap is hit; the result is
+  still usable, and raising `--max-iter` lets it finish.
+* **Velocity** is derived from activation height and is only approximate.
+
+## 7. Troubleshooting
 
 Errors are printed as one `Error: ...` line and the command exits with
 status 1; nothing is written to `--out-dir` for a failed run.

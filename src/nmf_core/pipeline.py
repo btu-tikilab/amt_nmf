@@ -34,7 +34,7 @@ def validate_params(
     sparsity_weight: float,
     threshold: float,
     beta: float = 2.0,
-    max_iter: int = 500,
+    max_iter: int = 1000,
     tol: float = 1e-4,
     min_duration: float = 0.05,
 ) -> None:
@@ -64,7 +64,7 @@ def transcribe(
     sparsity_weight: float = 0.2,
     threshold: float = 0.1,
     beta: float = 2.0,
-    max_iter: int = 500,
+    max_iter: int = 1000,
     tol: float = 1e-4,
     min_duration: float = 0.05,
     log=None,
@@ -183,7 +183,7 @@ def _write_outputs(
     threshold: float,
     min_duration: float,
     refit_offsets: bool = False,
-    max_iter: int = 500,
+    max_iter: int = 1000,
     tol: float = 1e-4,
 ) -> dict:
     cfg = d.config
