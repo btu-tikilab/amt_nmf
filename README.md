@@ -303,9 +303,16 @@ roll, times, pitches = z["pitch_roll"], z["times"], z["pitches"]
 
 ## 6. Known limitations
 
-* **Synthetic validation only.** The tests and examples use synthesized piano
-  tones. Accuracy on real recordings (e.g. MAPS) has not been measured here
-  and will be lower; `--threshold` and `--sparsity-weight` may need tuning.
+* **Piano only.** The dictionary, defaults and note-onset logic assume piano.
+  Other instruments' notes are read by `build-dict`, but notes that swell
+  instead of starting with a hit (flute, strings, voice) are detected late.
+* **Synthetic tests, lower scores on real recordings.** The tests and examples
+  use synthesized piano tones (onset F1 0.96 to 1.00). On three 30-second
+  real concert-grand excerpts from MAESTRO the onset F1 was about 0.4 to 0.6,
+  and group-sparse was not always better than standard: at the default
+  sparsity weight it also removes real notes. For real recordings start with
+  `--threshold 0.05 --sparsity-weight 0.05`. Mixes with pads, strings, drums
+  or heavy reverb give many wrong notes.
 * **Fixed dictionary.** W is learned once from single notes and not adapted
   to the recording, so a different piano or room lowers accuracy.
 * **Note endings in group-sparse** come from an unpenalised re-fit (see

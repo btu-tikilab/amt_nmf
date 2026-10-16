@@ -80,3 +80,21 @@ def test_zero_weight_matches_standard_euclidean(problem):
     assert gs.reconstruction_error(V) == pytest.approx(
         std.reconstruction_error(V), abs=1e-3
     )
+
+
+def test_penalty_is_grouped_per_pitch():
+    """l1,2 shrinks an atom by its pitch group's norm, not by its own size.
+
+    Atoms 1 and 2 play at the same small level, but atom 1 shares a group
+    with a loud atom and atom 2 is alone in its group. A per-pitch group
+    penalty keeps atom 1 and suppresses atom 2; a plain (ungrouped) l1
+    penalty would shrink both equally.
+    """
+    W = np.eye(8)  # orthogonal atoms, so the penalty alone decides
+    groups = [[0, 1], [2, 3], [4, 5], [6, 7]]
+    h = np.array([1.0, 0.1, 0.1, 0, 0, 0, 0, 0])
+    V = np.outer(W @ h, np.ones(5))
+    H = group_sparse_nmf(V, W, groups, sparsity_weight=0.08, beta=2, tol=1e-8).H
+    weak_in_loud_group, weak_alone = H[1].mean(), H[2].mean()
+    assert weak_in_loud_group > 0.08
+    assert weak_alone < 0.5 * weak_in_loud_group
