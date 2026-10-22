@@ -12,3 +12,7 @@ outputs/
 !tests/**/*.npy
 demo/
 dictionaries/
+
+# your own audio and datasets (never commit)
+recordings/
+data/
