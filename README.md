@@ -742,8 +742,11 @@ Never commit `.venv/`, `outputs/`, `demo/`, `dictionaries/`, `recordings/`,
 
 BTU TikiLab, Automatic Music Transcription with NMF.
 
+* Supervisor: Prasanth Varadarajan
 * Purnakash Gadde
-* Tharun Kankanala
+* Varun Kankanala
+* Venkata Sumathi yadala
+
 
 ---
 
